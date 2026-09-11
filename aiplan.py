@@ -58,7 +58,7 @@ TOKEN_FILE = (os.environ.get("AI_PLAN_TOKEN_FILE")
               or os.path.join(os.path.expanduser("~"), "Desktop", "token.txt"))
 
 SCHEMA_VERSION = "1"
-PROMPT_VERSION = "1"
+PROMPT_VERSION = "2"      # v2：止损双口径约束、计划自洽硬约束（买入≥止损/仓位一致）、T+1 可卖口径
 DEFAULT_MAX_INPUT_CHARS = 160000
 DEFAULT_TOP = 20
 FETCH_TIMEOUT = 1800                 # 单个抓数脚本的超时（秒）
