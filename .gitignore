@@ -1,0 +1,33 @@
+# ---- 敏感：绝不入库 ----
+# 模型配置含明文 API key（providers[].api_key）
+模型配置.json
+# 账户资金/费率配置（含 api_key 字段）
+账户配置.json
+# 券商真实持仓（个人财务数据）
+持仓数据.md
+# 通用凭据兜底
+token.txt
+*.env
+.env
+credentials*
+*_credentials.json
+secrets*.json
+
+# ---- 运行产物 / 生成数据 ----
+data/
+!data/.gitkeep
+__pycache__/
+*.py[cod]
+*.pyo
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- 临时 ----
+*.tmp
+*.log
+~$*
