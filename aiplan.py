@@ -51,9 +51,11 @@ AI_DIR = os.path.join(DATA_DIR, "ai")
 AI_HISTORY = os.path.join(AI_DIR, "history")
 PLAN_LOG = os.path.join(AI_HISTORY, "plan_log.jsonl")
 
-DEFAULT_POOL = os.path.join(SCRIPT_DIR, "持仓数据.md")
-DEFAULT_ACCOUNT = os.path.join(SCRIPT_DIR, "账户配置.json")
-DEFAULT_MODELS = os.path.join(SCRIPT_DIR, "模型配置.json")
+# [SEC-02b] 个人文件位置（2026-09 目录整理）：持仓/自选归 data/user/，配置归 config/。
+# 只改了这三行的指向，其余逻辑与取值方式（命令行 --pool/--account/--models 覆盖）不变。
+DEFAULT_POOL = os.path.join(DATA_DIR, "user", "持仓数据.md")
+DEFAULT_ACCOUNT = os.path.join(SCRIPT_DIR, "config", "账户配置.json")
+DEFAULT_MODELS = os.path.join(SCRIPT_DIR, "config", "模型配置.json")
 TOKEN_FILE = (os.environ.get("AI_PLAN_TOKEN_FILE")
               or os.path.join(os.path.expanduser("~"), "Desktop", "token.txt"))
 

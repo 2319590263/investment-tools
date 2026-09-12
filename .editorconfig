@@ -1,0 +1,24 @@
+# 统一缩进 / 编码 / 换行，避免不同编辑器把 diff 搅乱。
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+indent_style = space
+indent_size = 4
+
+[*.{js,css,html,json,md,txt,yml,yaml}]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+[Makefile]
+indent_style = tab
+
+# Windows 批处理必须是 CRLF；中文提示按控制台代码页显示，改动时注意编码。
+[*.{cmd,bat}]
+end_of_line = crlf
+indent_size = 2

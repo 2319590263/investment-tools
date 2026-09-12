@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>aiplan 研判控制台</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+<div class="app">
+
+  <aside class="side">
+    <div class="brand">
+      <div class="brand-mark">ai</div>
+      <div class="brand-text"><strong>aiplan</strong><span>研判控制台</span></div>
+    </div>
+    <nav class="nav" id="nav">
+      <button class="nav-item" data-view="console"><i>⌂</i>总控台</button>
+      <button class="nav-item active" data-view="run"><i>▶</i>运行研判</button>
+      <button class="nav-item" data-view="report"><i>▤</i>报告</button>
+      <button class="nav-item" data-view="history"><i>◷</i>历史与复盘</button>
+      <button class="nav-item" data-view="holdings"><i>◈</i>持仓 / 账户</button>
+      <button class="nav-item" data-view="watch"><i>★</i>自选股</button>
+      <button class="nav-item" data-view="pick"><i>❖</i>荐股</button>
+      <button class="nav-item" data-view="models"><i>⚙</i>模型配置</button>
+      <button class="nav-item" data-view="market"><i>☵</i>大盘快照</button>
+    </nav>
+    <div class="side-foot" id="side-foot"></div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-title" id="topbar-title">运行研判</div>
+      <div class="topbar-meta" id="topbar-meta"></div>
+      <button class="bell" id="btn-alerts" title="消息队列（到价提醒）">🔔<span class="bell-count" id="alert-count" hidden>0</span></button>
+    </header>
+
+    <div class="views">
+
+      <!-- ================= 运行 ================= -->
+      <section class="view" id="view-console">
+        <div class="card" id="console-nudge" hidden>
+          <div class="card-b row">
+            <span id="console-nudge-text"></span>
+            <div class="spacer"></div>
+            <button class="btn primary" id="btn-console-nudge">以 10 秒开启自动刷新</button>
+          </div>
+        </div>
+
+        <div class="card" id="console-alert-card" hidden>
+          <div class="card-h"><span>消息队列</span><span class="muted" id="console-alert-note"></span>
+            <div class="spacer"></div>
+            <button class="btn ghost" id="btn-alert-clear">清空</button></div>
+          <div class="card-b" id="console-alerts"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><span>持仓股</span><span class="muted" id="console-hold-sum"></span>
+            <div class="spacer"></div>
+            <label class="sw"><input type="checkbox" id="console-auto"> 自动刷新</label>
+            <select id="console-interval" class="inline-select"></select>
+            <span class="muted" id="console-auto-state"></span>
+            <span class="muted" id="console-last"></span>
+            <button class="btn ghost" id="btn-console-quotes">刷新实盘价</button></div>
+          <div class="card-b">
+            <div class="stock-grid" id="console-holdings"><div class="muted">加载中 …</div></div>
+            <div id="console-hints" style="margin-top:8px"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><span>自选股</span><span class="muted" id="console-watch-sum"></span></div>
+          <div class="card-b"><div class="stock-grid" id="console-watch"><div class="muted">加载中 …</div></div></div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-h"><span>系统状态</span><span class="muted" id="console-at"></span>
+              <div class="spacer"></div>
+              <button class="btn ghost" id="btn-console-reload">刷新</button></div>
+            <div class="card-b" id="console-body"><div class="muted">加载中 …</div></div>
+          </div>
+          <div class="card">
+            <div class="card-h"><span>待接入模块</span><span class="muted">骨架已就位，功能按需再补</span></div>
+            <div class="card-b">
+              <div class="ph-grid">
+                <div class="mini-card"><div class="sec-title">实盘触发总览</div>
+                  <div class="muted">已部分落地：见上方持仓 / 自选卡片与到价提醒；更细的触发面板待补</div></div>
+                <div class="mini-card"><div class="sec-title">当日执行清单</div>
+                  <div class="muted">功能待补</div></div>
+                <div class="mini-card"><div class="sec-title">风险与失效提醒</div>
+                  <div class="muted">功能待补</div></div>
+                <div class="mini-card"><div class="sec-title">数据源健康</div>
+                  <div class="muted">功能待补</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="view active" id="view-run">
+        <div class="grid-run">
+          <div class="card">
+            <div class="card-h"><span>标的与时点</span><span class="muted">选时段 + 填代码就能跑</span></div>
+            <div class="card-b">
+              <div class="field">
+                <label>时段</label>
+                <div class="seg" id="phase-seg">
+                  <button data-phase="prep">盘前</button>
+                  <button data-phase="live">盘中</button>
+                  <button data-phase="post" class="on">盘后</button>
+                  <button data-phase="all">全时段</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>标的代码 <span class="req">必填</span></label>
+                <div class="row">
+                  <input id="code" list="code-list" placeholder="如 002463 或 002463.SZ" autocomplete="off" />
+                  <datalist id="code-list"></datalist>
+                  <button class="btn ghost" id="btn-holdings-pick" title="列出持仓与数据里的标的">选择</button>
+                </div>
+                <div class="hint" id="code-hint">一次只深度研判一只标的。</div>
+              </div>
+              <details class="adv">
+                <summary>高级选项（交易日 / profile / 抓数条数 / 事实包预算）</summary>
+                <div class="adv-b">
+                  <div class="field-2">
+                    <div class="field">
+                      <label>目标交易日 <span class="muted">--date</span></label>
+                      <input id="date" type="date" />
+                    </div>
+                    <div class="field">
+                      <label>profile <span class="muted">--profile</span></label>
+                      <select id="profile"></select>
+                    </div>
+                  </div>
+                  <div class="field-2">
+                    <div class="field">
+                      <label>抓数条数 <span class="muted">--top</span></label>
+                      <input id="top" type="number" min="1" value="20" />
+                    </div>
+                    <div class="field">
+                      <label>事实包预算 <span class="muted">--max-input-chars</span></label>
+                      <input id="maxchars" type="number" min="1000" step="1000" value="160000" />
+                    </div>
+                  </div>
+                </div>
+              </details>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-h"><span>运行选项</span><span class="muted">平时只需这两个</span></div>
+            <div class="card-b">
+              <label class="switch"><input type="checkbox" id="opt-dry-run" /><span class="track"></span>
+                <span class="sw-label">只看不花钱 <code>--dry-run</code><em>只生成事实包，不调用模型</em></span></label>
+              <label class="switch"><input type="checkbox" id="opt-no-fetch" /><span class="track"></span>
+                <span class="sw-label">复用已有数据 <code>--no-fetch</code><em>不再抓数，直接用 data/ 里的 JSON</em></span></label>
+
+              <details class="adv">
+                <summary>高级选项（省调用 / 调试 / 覆盖模型与 Key）</summary>
+                <div class="adv-b">
+                  <label class="switch sm"><input type="checkbox" id="opt-no-review" /><span class="track"></span>
+                    <span class="sw-label">跳过复核档 <code>--no-review</code><em>省一次模型调用</em></span></label>
+                  <label class="switch sm"><input type="checkbox" id="opt-debug" /><span class="track"></span>
+                    <span class="sw-label">抓数调试 <code>--debug</code><em>透传 pan.py / stock3d.py</em></span></label>
+                </div>
+                <div class="adv-b" style="border-top:1px dashed var(--line); margin-top:8px; padding-top:10px">
+                  <div class="field"><label>研判模型 <span class="muted">--model-pro</span></label>
+                    <input id="model-pro" placeholder="留空用 profile 配置" /></div>
+                  <div class="field"><label>复核模型 <span class="muted">--model-review</span></label>
+                    <input id="model-review" placeholder="留空用 profile 配置" /></div>
+                  <div class="field"><label>API Key <span class="muted">--api-key，仅本次生效</span></label>
+                    <input id="api-key" type="password" placeholder="留空则按 环境变量 → 配置 → token.txt" /></div>
+                  <div class="field"><label>API Base <span class="muted">--api-base，排障用</span></label>
+                    <input id="api-base" placeholder="留空用 provider 配置" /></div>
+                </div>
+              </details>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-h">
+            <span>执行</span>
+            <div class="spacer"></div>
+            <button class="btn ghost" id="btn-check">连通性自检</button>
+            <button class="btn ghost" id="btn-make-prompt" title="等价于 --dry-run，只落事实包与提示词">预览事实包</button>
+            <button class="btn ghost" id="btn-batch" title="对持仓文件里的每一只标的依次研判">批量研判持仓</button>
+            <button class="btn danger ghost" id="btn-stop" hidden>中断</button>
+            <button class="btn primary" id="btn-run">开始研判</button>
+          </div>
+          <div class="card-b">
+            <div class="run-diagnose" id="run-diagnose" hidden></div>
+            <div class="run-line">
+              <span class="chip" id="run-status">待运行</span>
+              <code class="cmd" id="run-cmd">python aiplan.py post --code 002463.SZ</code>
+            </div>
+            <pre class="console" id="console"><span class="muted">等待开始 …</span></pre>
+            <div id="batch-result"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 报告 ================= -->
+      <section class="view" id="view-report">
+        <div class="toolbar">
+          <select id="report-pick" class="grow"></select>
+          <button class="btn ghost" id="btn-report-reload">刷新</button>
+          <div class="tabs" id="report-tabs">
+            <button data-tab="struct" class="on">结构化</button>
+            <button data-tab="md">完整报告</button>
+            <button data-tab="json">原始 JSON</button>
+          </div>
+          <button class="btn ghost" id="btn-download-md">下载 Markdown</button>
+        </div>
+        <div id="report-struct" class="report-body"></div>
+        <div id="report-md" class="report-body md-wrap" hidden></div>
+        <div id="report-json" class="report-body" hidden><pre class="console tall" id="json-pre"></pre></div>
+      </section>
+
+      <!-- ================= 历史 ================= -->
+      <section class="view" id="view-history">
+        <div class="card">
+          <div class="card-h"><span>研判历史</span>
+            <span class="muted">计划记录与报告归档本就是同一份产出，合并显示</span>
+            <span class="muted" id="hist-count"></span>
+            <div class="spacer"></div>
+            <button class="btn ghost" id="btn-hist-reload">刷新</button></div>
+          <div class="card-b table-wrap"><table class="tbl" id="hist-table"></table></div>
+        </div>
+        <div class="card">
+          <div class="card-h"><span>回收站</span>
+            <span class="muted" id="trash-count"></span>
+            <span class="muted">超过 7 天自动真删（不可恢复），未过期的仍可搬回原位</span>
+            <div class="spacer"></div>
+            <span class="muted" id="trash-purge-note"></span>
+            <button class="btn ghost" id="btn-trash-purge">清理过期</button>
+            <button class="btn ghost" id="btn-trash-reload">刷新</button></div>
+          <div class="card-b table-wrap"><table class="tbl" id="trash-table"></table></div>
+        </div>
+      </section>
+
+      <!-- ================= 持仓 / 账户 ================= -->
+      <section class="view" id="view-holdings">
+        <div class="stat-row" id="hold-summary"></div>
+        <div class="card">
+          <div class="card-h"><span>持仓明细</span><span class="muted" id="hold-path"></span>
+            <div class="spacer"></div><span class="muted" id="hold-sync-state"></span>
+            <button class="btn ghost" id="btn-hold-captcha" hidden>填写验证码</button>
+            <button class="btn ghost" id="btn-hold-sync-stop" hidden>中断同步</button>
+            <button class="btn primary" id="btn-hold-sync">同步同花顺</button></div>
+          <div class="card-b table-wrap"><table class="tbl" id="hold-table"></table></div>
+        </div>
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-h"><span>账户配置</span>
+              <div class="spacer"></div>
+              <button class="btn ghost" id="btn-account-raw">原文</button>
+              <button class="btn primary" id="btn-account-save">保存</button></div>
+            <div class="card-b">
+              <div class="form-grid" id="account-form"></div>
+              <div class="err" id="account-msg"></div>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h"><span>持仓文件原文</span>
+              <div class="spacer"></div>
+              <span class="muted">保存前自动备份 .bak</span>
+              <button class="btn primary" id="btn-hold-save">保存持仓</button></div>
+            <div class="card-b">
+              <textarea class="editor" id="hold-editor" spellcheck="false"></textarea>
+              <div class="err" id="hold-msg"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 自选股 ================= -->
+      <section class="view" id="view-watch">
+        <div class="card">
+          <div class="card-h"><span>自选股</span><span class="muted" id="watch-path"></span>
+            <div class="spacer"></div>
+            <button class="btn ghost" id="btn-watch-batch">批量研判自选</button>
+            <button class="btn ghost" id="btn-watch-raw">原文</button></div>
+          <div class="card-b">
+            <div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+              <div class="field" style="margin:0;flex:0 0 150px">
+                <label>证券代码</label><input id="watch-code" placeholder="如 600519" /></div>
+              <div class="field" style="margin:0;flex:1 1 170px">
+                <label>名称 <span class="muted">可选</span></label><input id="watch-name" placeholder="留空则用行情缓存里的名称" /></div>
+              <div class="field" style="margin:0;flex:1 1 170px">
+                <label>备注 <span class="muted">可选</span></label><input id="watch-note" placeholder="如 等回调 / 观察放量" /></div>
+              <button class="btn primary" id="btn-watch-add">加入自选</button>
+            </div>
+            <div class="err" id="watch-msg"></div>
+          </div>
+          <div class="card-b table-wrap"><table class="tbl" id="watch-table"></table></div>
+        </div>
+      </section>
+
+      <!-- ================= 荐股 ================= -->
+      <section class="view" id="view-pick">
+        <div class="grid-run">
+          <div class="card">
+            <div class="card-h"><span>选什么</span><span class="muted">先筛选板块再跑，默认不选</span>
+              <div class="spacer"></div>
+              <button class="btn ghost sm" id="btn-pick-hot" title="一级行业热度前 5 + 概念热度前 5">热度前 10</button>
+              <button class="btn ghost sm" id="btn-pick-clear">清空</button>
+              <button class="btn ghost sm" id="btn-pick-refresh" title="清掉缓存重新拉取板块行情与成分">刷新</button></div>
+            <div class="card-b">
+              <div class="hint" id="pick-sel-count">已选：行业 0 个 ｜ 概念 0 个</div>
+              <div class="field">
+                <label>模块 <span class="muted">单选：不同模块用不同权重</span></label>
+                <div class="seg" id="pick-modules">
+                  <button data-module="短线" class="on">短线 1-5 日</button>
+                  <button data-module="波段">波段 2-6 周</button>
+                  <button data-module="中线">中线 1-3 月</button>
+                  <button data-module="长线">长线 6 月+</button>
+                </div>
+              </div>
+              <div class="field">
+                <label>筛选 <span class="muted">行业按一级 → 细分，概念按主题</span></label>
+                <div class="row">
+                  <input id="pick-search" class="grow" placeholder="搜索板块名，如 半导体、军工、AI、锂电" autocomplete="off" />
+                  <div class="tabs" id="pick-tabs">
+                    <button data-tab="industry" class="on">行业</button>
+                    <button data-tab="concept">概念</button>
+                  </div>
+                </div>
+                <div class="hint" id="pick-filter-msg"></div>
+              </div>
+              <div class="row pick-tools">
+                <button class="btn sm ghost" id="btn-pick-selectall">全选本页（按当前搜索）</button>
+                <span class="hint" id="pick-selectall-note"></span>
+              </div>
+              <div class="pick-list" id="pick-panel-industry"></div>
+              <div class="pick-list" id="pick-panel-concept" hidden></div>
+              <div class="field" style="margin-top:12px">
+                <label>每板块候选 <span class="muted">每个板块取涨幅前 N 只进候选池</span></label>
+                <input id="pick-per-board" type="number" min="1" max="20" value="5" style="max-width:120px" />
+              </div>
+              <details class="adv">
+                <summary>高级选项（候选上限 / 事实包预算 / 模型与 Key / 排除规则）</summary>
+                <div class="adv-b">
+                  <div class="field"><label>候选总数上限 <span class="muted">去重后超出按板块热度截断</span></label>
+                    <input id="pick-max-candidates" type="number" min="20" max="2000" value="400" /></div>
+                  <div class="field"><label>事实包预算 <span class="muted">字符</span></label>
+                    <input id="pick-max-chars" type="number" min="4000" step="1000" value="40000" /></div>
+                  <div class="field"><label>profile</label><select id="pick-profile"></select></div>
+                  <div class="field"><label>研判模型 <span class="muted">留空用 profile 配置</span></label>
+                    <input id="pick-model" placeholder="留空用 profile 配置" /></div>
+                  <div class="field"><label>API Base <span class="muted">排障用</span></label>
+                    <input id="pick-api-base" placeholder="留空用 provider 配置" /></div>
+                  <div class="field"><label>API Key <span class="muted">仅本次生效</span></label>
+                    <input id="pick-api-key" type="password" placeholder="留空则按 环境变量 → 配置 → token.txt" /></div>
+                </div>
+                <div class="adv-b" style="border-top:1px dashed var(--line); margin-top:8px; padding-top:10px">
+                  <label class="switch sm"><input type="checkbox" id="pick-ex-st" checked /><span class="track"></span>
+                    <span class="sw-label">排除 ST <em>含 *ST</em></span></label>
+                  <label class="switch sm"><input type="checkbox" id="pick-ex-new" checked /><span class="track"></span>
+                    <span class="sw-label">排除次新 <em>上市不足 60 个交易日</em></span></label>
+                  <label class="switch sm"><input type="checkbox" id="pick-ex-price" checked /><span class="track"></span>
+                    <span class="sw-label">排除低价股 <em>现价低于 2 元</em></span></label>
+                  <label class="switch sm"><input type="checkbox" id="pick-ex-amount" checked /><span class="track"></span>
+                    <span class="sw-label">排除低成交 <em>成交额低于 5000 万</em></span></label>
+                  <label class="switch sm"><input type="checkbox" id="pick-ex-688" /><span class="track"></span>
+                    <span class="sw-label">排除科创板 / 北交所 <em>688 / 8 / 4 开头</em></span></label>
+                </div>
+              </details>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h"><span>花费与节奏</span><span class="muted">固定 1 次模型调用</span></div>
+            <div class="card-b">
+              <div class="note" id="pick-hint">先在上面筛选行业细分或概念板块，再点「开始荐股」。</div>
+              <div class="row">
+                <button class="btn primary" id="btn-pick-run">开始荐股</button>
+                <button class="btn ghost" id="btn-pick-stop" disabled>中断</button>
+                <button class="btn ghost" id="btn-pick-history">历史结果</button>
+              </div>
+              <div class="hint">只抓你选中的板块（未选的不拉取）；结果落 data/ai/pick/，不进 plan_log；除「加入自选」外不写配置。</div>
+            </div>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-h"><span>执行</span><span class="muted" id="pick-cmd"></span>
+            <div class="spacer"></div><span class="hint" id="pick-job-state"></span></div>
+          <div class="card-b"><pre class="console tall" id="pick-console">等待开始 …</pre></div>
+        </div>
+        <div id="pick-result"></div>
+      </section>
+
+      <!-- ================= 模型配置 ================= -->
+      <section class="view" id="view-models">
+        <div class="card">
+          <div class="card-h"><span>profile</span><span class="muted" id="models-default"></span>
+            <div class="spacer"></div>
+            <span class="muted">自检用</span>
+            <select id="check-profile" class="inline-select"></select>
+            <button class="btn ghost" id="btn-model-check">连通性自检</button></div>
+          <div class="card-b"><div class="profile-grid" id="profile-grid"></div></div>
+          <div class="card-b"><pre class="console" id="model-console" hidden></pre></div>
+        </div>
+        <div class="card">
+          <div class="card-h"><span>provider</span><span class="muted">Key 只显示掩码</span></div>
+          <div class="card-b table-wrap"><table class="tbl" id="provider-table"></table></div>
+        </div>
+        <div class="card">
+          <div class="card-h"><span>模型配置原文</span>
+            <div class="spacer"></div>
+            <button class="btn primary" id="btn-models-save">保存</button></div>
+          <div class="card-b">
+            <textarea class="editor tall" id="models-editor" spellcheck="false"></textarea>
+            <div class="err" id="models-msg"></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 大盘快照 ================= -->
+      <section class="view" id="view-market">
+        <div class="toolbar">
+          <span class="muted" id="market-src"></span>
+          <div class="spacer"></div>
+          <button class="btn ghost" id="btn-market-reload">刷新</button>
+        </div>
+        <div id="market-body"></div>
+      </section>
+
+    </div>
+  </main>
+</div>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="modal">
+    <div class="modal-h"><span id="modal-title">标题</span><button class="btn ghost" id="modal-close">关闭</button></div>
+    <div class="modal-b" id="modal-body"></div>
+  </div>
+</div>
+<div class="toasts" id="toasts"></div>
+
+<!-- 单入口：原生 ES 模块（无构建步骤，改完刷新页面即生效） -->
+<script type="module" src="/js/main.js"></script>
+</body>
+</html>
+
+

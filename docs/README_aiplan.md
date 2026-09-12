@@ -9,8 +9,8 @@
 > 报告由大模型生成，**不构成投资建议**；数据部分仍是中性事实与数值。
 
 ```
-python aiplan.py init-account                    # 生成 账户配置.json（必须先填「总资金」）
-python aiplan.py init-models                     # 生成 模型配置.json
+python aiplan.py init-account                    # 生成 config/账户配置.json（必须先填「总资金」）
+python aiplan.py init-models                     # 生成 config/模型配置.json
 python aiplan.py check-model                     # 连通性自检（研判/复核各 ping 一次）
 
 python aiplan.py post --code 002463.SZ           # 盘后：抓数→事实包→研判→复核→报告
@@ -33,9 +33,9 @@ python aiplan.py post --code 002463.SZ --no-review    # 跳过复核档
 | `--code CODE` | 运行类 | **必填**，一次只深度研判一只（6 位代码或 `002463.SZ`）。省略则报错并列出持仓文件可选代码 |
 | `--name NAME` | 运行类 | 标的名称（可选，仅影响报告标题） |
 | `--date YYYY-MM-DD` | 运行类 | 目标交易日，透传给 pan.py / stock3d.py |
-| `--pool FILE` | 运行类 | 持仓文件（默认 `持仓数据.md`）；用于取成本/持仓/T+1 可卖与其它持仓市值 |
-| `--account FILE` | 运行类 | 账户配置（默认 `账户配置.json`） |
-| `--models FILE` | 运行类 | 模型配置（默认 `模型配置.json`） |
+| `--pool FILE` | 运行类 | 持仓文件（默认 `data/user/持仓数据.md`）；用于取成本/持仓/T+1 可卖与其它持仓市值 |
+| `--account FILE` | 运行类 | 账户配置（默认 `config/账户配置.json`） |
+| `--models FILE` | 运行类 | 模型配置（默认 `config/模型配置.json`） |
 | `--profile NAME` | 运行类 | 临时指定 profile，覆盖 `profiles_by_phase` 与 `默认_profile` |
 | `--phase-profile NAME` | 运行类 | 按 phase 指定 profile（优先级低于 `--profile`） |
 | `--top N` | 运行类 | 透传给抓数脚本的榜单条数（默认 20） |
@@ -52,7 +52,7 @@ python aiplan.py post --code 002463.SZ --no-review    # 跳过复核档
 
 ## 二、模型层（本轮核心：不顶死）
 
-`模型配置.json` 由 `init-models` 生成，三段结构：
+`config/模型配置.json` 由 `init-models` 生成，三段结构：
 
 - **`providers[]`**：每个渠道一段。`名称` / `协议` / `base_url` / `路径` / `key_env` / `api_key` /
   `超时_秒` / `重试` / `json_object`（是否支持 `response_format=json_object`）/ `单价`（输入、输出、
@@ -177,7 +177,7 @@ ETF 佣金可单列 `ETF_佣金费率_pct` / `ETF_佣金最低_元`）。
 
 结果写入报告第 1 节，并**回写**到 `plan_log` 中对应那条记录的 `复盘` 字段。
 
-## 七、账户配置（`账户配置.json`）
+## 七、账户配置（`config/账户配置.json`）
 
 `总资金`（元，**必填**）、`单票仓位上限_pct`、`单笔最大亏损_pct`（占总资金）、`最低现金比例_pct`、
 `最大加仓次数`、`佣金费率_pct`、`佣金最低_元`、`ETF_佣金费率_pct`、`ETF_佣金最低_元`（可空，缺省回落个股费率，

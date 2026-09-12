@@ -1,0 +1,19 @@
+# 只放工具配置，不是打包元数据：本项目运行时零第三方依赖，
+# 这里的内容只有在本地额外装了 ruff 时才生效（见 requirements-dev.txt）。
+
+[tool.ruff]
+line-length = 110
+target-version = "py39"
+exclude = ["data", "build", ".git"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]
+ignore = ["E501"]              # 注释与文档中英混排，长行交给编辑器折行
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

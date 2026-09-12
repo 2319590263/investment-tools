@@ -1,0 +1,8 @@
+{
+ "文件": {
+  "aiplan.py": "461cbcc79f5243426caeeea3bb1b56f4d7efab93a2f7ec88c7ba668380a1a49e",
+  "pan.py": "dd6ce956fe28ee6c27f927d29b1d1fcb10ac5aa10ee80d928f3fa7f756a9339d",
+  "stock3d.py": "ef43f30c635f8a613906d4adfdbaab701badf1cbf16d8181284e4eb1bbad613b"
+ },
+ "说明": "三个 CLI 的 sha256 基线；只有走查过才用 --update-baseline 重登记。"
+}

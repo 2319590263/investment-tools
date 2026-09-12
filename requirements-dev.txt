@@ -1,0 +1,10 @@
+# 可选开发依赖 —— 主程序与 tests/ 都**不需要**它们，不装完全不影响使用。
+#
+# 交付物的自动化测试只用标准库 unittest（python main.py test），
+# 所以下面两项默认全部注释掉；想要更严格的本地检查时再取消注释安装：
+#
+# ruff==0.8.4      # 静态检查 + 格式化：python -m ruff check . / python -m ruff format .
+# pytest==8.3.4    # 把 tests/ 改成 pytest 风格时才需要（当前用 unittest，可不装）
+#
+# 浏览器交互用例（tests/ui/ui_smoke.mjs）需要 Node.js 18+ 与 playwright（npm 包，不进 pip）：
+#   npm i playwright && npx playwright install msedge

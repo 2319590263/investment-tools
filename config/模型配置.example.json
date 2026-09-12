@@ -1,0 +1,418 @@
+{
+ "版本": "1",
+ "默认_profile": "zhipu-双档",
+ "汇率": {
+  "USD_CNY": 7.1
+ },
+ "profiles": {
+  "zhipu-双档": {
+   "说明": "默认档：智谱 glm-5.3 主研判（reasoning_effort=high）+ glm-5.3-flash 复核（low）。该系列模型始终思考、不能关闭，只能用 reasoning_effort 控档；不传会烧光 max_tokens 导致无正文。正式下单前可切 deepseek-双档。",
+   "研判": {
+    "provider": "zhipu",
+    "model": "glm-5.3",
+    "temperature": 0.3,
+    "max_tokens": 16000,
+    "参数": {
+     "reasoning_effort": "high"
+    }
+   },
+   "复核": {
+    "provider": "zhipu",
+    "model": "glm-5.3-flash",
+    "temperature": 0.2,
+    "max_tokens": 8000,
+    "参数": {
+     "reasoning_effort": "low"
+    }
+   }
+  },
+  "zhipu-全闪": {
+   "说明": "全免费档：研判与复核都用 glm-5.3-flash（reasoning_effort=low）",
+   "研判": {
+    "provider": "zhipu",
+    "model": "glm-5.3-flash",
+    "temperature": 0.3,
+    "max_tokens": 10000,
+    "参数": {
+     "reasoning_effort": "low"
+    }
+   },
+   "复核": {
+    "provider": "zhipu",
+    "model": "glm-5.3-flash",
+    "temperature": 0.2,
+    "max_tokens": 8000,
+    "参数": {
+     "reasoning_effort": "low"
+    }
+   }
+  },
+  "deepseek-双档": {
+   "说明": "默认档：pro 主研判 + flash 复核（现有 DeepSeek key 可直接跑）",
+   "研判": {
+    "provider": "deepseek",
+    "model": "deepseek-v4-pro",
+    "temperature": 0.3,
+    "max_tokens": 12000,
+    "参数": {}
+   },
+   "复核": {
+    "provider": "deepseek",
+    "model": "deepseek-v4-flash",
+    "temperature": 0.2,
+    "max_tokens": 16000,
+    "参数": {}
+   }
+  },
+  "deepseek-单档": {
+   "说明": "省钱档：只用 flash；复核留空即等价于 --no-review",
+   "研判": {
+    "provider": "deepseek",
+    "model": "deepseek-v4-flash",
+    "temperature": 0.3,
+    "max_tokens": 16000,
+    "参数": {}
+   },
+   "复核": null
+  },
+  "anthropic-双档": {
+   "说明": "换协议的示例：Anthropic Messages 协议走同一 key",
+   "研判": {
+    "provider": "deepseek-anthropic",
+    "model": "deepseek-v4-pro",
+    "temperature": 0.3,
+    "max_tokens": 12000,
+    "参数": {}
+   },
+   "复核": {
+    "provider": "deepseek-anthropic",
+    "model": "deepseek-v4-flash",
+    "temperature": 0.2,
+    "max_tokens": 16000,
+    "参数": {}
+   }
+  }
+ },
+ "profiles_by_phase": {
+  "prep": "",
+  "live": "",
+  "post": "",
+  "all": ""
+ },
+ "providers": [
+  {
+   "名称": "deepseek",
+   "协议": "openai-chat",
+   "base_url": "https://api.deepseek.com",
+   "路径": "/chat/completions",
+   "key_env": "DEEPSEEK_API_KEY",
+   "api_key": "",
+   "超时_秒": 300,
+   "重试": 2,
+   "json_object": true,
+   "单价": {
+    "输入": 1.32,
+    "输出": 3.96,
+    "缓存读取": 0.044,
+    "币种": "USD",
+    "单位": "每百万token"
+   },
+   "模型单价": {
+    "deepseek-v4-flash": {
+     "输入": 0.44,
+     "输出": 1.32,
+     "缓存读取": 0.014
+    },
+    "deepseek-v4-pro": {
+     "输入": 1.32,
+     "输出": 3.96,
+     "缓存读取": 0.044
+    }
+   },
+   "余额端点": "/user/balance",
+   "模型可选": [
+    "deepseek-v4-pro",
+    "deepseek-v4-flash"
+   ],
+   "备注": "OpenAI 兼容协议实测可用；余额端点 /user/balance 实测可用。"
+  },
+  {
+   "名称": "deepseek-anthropic",
+   "协议": "anthropic-messages",
+   "base_url": "https://api.deepseek.com/anthropic",
+   "路径": "/v1/messages",
+   "key_env": "DEEPSEEK_API_KEY",
+   "api_key": "",
+   "超时_秒": 300,
+   "重试": 2,
+   "json_object": false,
+   "单价": {
+    "输入": 1.32,
+    "输出": 3.96,
+    "缓存读取": 0.044,
+    "币种": "USD",
+    "单位": "每百万token"
+   },
+   "模型单价": {
+    "deepseek-v4-flash": {
+     "输入": 0.44,
+     "输出": 1.32,
+     "缓存读取": 0.014
+    }
+   },
+   "余额端点": "",
+   "模型可选": [
+    "deepseek-v4-flash",
+    "deepseek-v4-pro"
+   ],
+   "备注": "Anthropic Messages 协议实测可用（同一 DeepSeek key，x-api-key 认证）；响应含 thinking 块，解析时只取 type=text 的块；无 response_format，靠提示词约束 JSON。"
+  },
+  {
+   "名称": "zhipu",
+   "协议": "openai-chat",
+   "base_url": "https://open.bigmodel.cn/api/paas/v4",
+   "路径": "/chat/completions",
+   "key_env": "ZHIPU_API_KEY",
+   "api_key": "",
+   "超时_秒": 300,
+   "重试": 2,
+   "json_object": true,
+   "单价": {
+    "输入": 0,
+    "输出": 0,
+    "缓存读取": 0,
+    "币种": "CNY",
+    "单位": "每百万token"
+   },
+   "余额端点": "",
+   "模型可选": [
+    "glm-5.3",
+    "glm-5.3-flash",
+    "glm-5.2",
+    "glm-5",
+    "glm-4.7",
+    "glm-4.6",
+    "glm-4.5-air"
+   ],
+   "备注": "实测可用（key 已写入本文件）；glm-5.3-flash 为免费/低价档。单价未配置（费率随账号套餐变化），报告只记 token 不编造金额；如需计费请自行填「单价」。"
+  },
+  {
+   "名称": "siliconflow",
+   "协议": "openai-chat",
+   "base_url": "https://api.siliconflow.cn/v1",
+   "路径": "/chat/completions",
+   "key_env": "SILICONFLOW_API_KEY",
+   "api_key": "",
+   "超时_秒": 300,
+   "重试": 2,
+   "json_object": true,
+   "单价": {
+    "输入": 0,
+    "输出": 0,
+    "缓存读取": 0,
+    "币种": "CNY",
+    "单位": "每百万token"
+   },
+   "余额端点": "",
+   "模型可选": [
+    "Qwen/Qwen3-8B",
+    "deepseek-ai/DeepSeek-V3"
+   ],
+   "备注": "有免费模型档，需注册取 key；端点本机可达。"
+  },
+  {
+   "名称": "modelscope",
+   "协议": "openai-chat",
+   "base_url": "https://api-inference.modelscope.cn/v1",
+   "路径": "/chat/completions",
+   "key_env": "MODELSCOPE_API_KEY",
+   "api_key": "",
+   "超时_秒": 300,
+   "重试": 2,
+   "json_object": false,
+   "单价": {
+    "输入": 0,
+    "输出": 0,
+    "缓存读取": 0,
+    "币种": "CNY",
+    "单位": "每百万token"
+   },
+   "余额端点": "",
+   "模型可选": [
+    "Qwen/Qwen3-8B"
+   ],
+   "备注": "魔搭 API-Inference，每日免费额度，需注册 token；端点本机可达。"
+  },
+  {
+   "名称": "volces-ark",
+   "协议": "openai-chat",
+   "base_url": "https://ark.cn-beijing.volces.com/api/v3",
+   "路径": "/chat/completions",
+   "key_env": "ARK_API_KEY",
+   "api_key": "",
+   "超时_秒": 300,
+   "重试": 2,
+   "json_object": true,
+   "单价": {
+    "输入": 0,
+    "输出": 0,
+    "缓存读取": 0,
+    "币种": "CNY",
+    "单位": "每百万token"
+   },
+   "余额端点": "",
+   "模型可选": [
+    "doubao-seed-1-6",
+    "doubao-1-5-pro-32k"
+   ],
+   "备注": "火山方舟（豆包），新用户有免费额度，需注册 key；endpoint id 形如 ep-xxxx，按控制台填写。"
+  },
+  {
+   "名称": "dashscope",
+   "协议": "openai-chat",
+   "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+   "路径": "/chat/completions",
+   "key_env": "DASHSCOPE_API_KEY",
+   "api_key": "",
+   "超时_秒": 300,
+   "重试": 2,
+   "json_object": true,
+   "单价": {
+    "输入": 0,
+    "输出": 0,
+    "缓存读取": 0,
+    "币种": "CNY",
+    "单位": "每百万token"
+   },
+   "余额端点": "",
+   "模型可选": [
+    "qwen-plus",
+    "qwen-max",
+    "qwen-turbo"
+   ],
+   "备注": "阿里百炼（千问），新用户有免费额度，需注册 key。"
+  },
+  {
+   "名称": "moonshot",
+   "协议": "openai-chat",
+   "base_url": "https://api.moonshot.cn/v1",
+   "路径": "/chat/completions",
+   "key_env": "MOONSHOT_API_KEY",
+   "api_key": "",
+   "超时_秒": 300,
+   "重试": 2,
+   "json_object": true,
+   "单价": {
+    "输入": 0,
+    "输出": 0,
+    "缓存读取": 0,
+    "币种": "CNY",
+    "单位": "每百万token"
+   },
+   "余额端点": "",
+   "模型可选": [
+    "kimi-k2-0905-preview",
+    "moonshot-v1-32k"
+   ],
+   "备注": "Kimi（月之暗面），需注册 key。"
+  },
+  {
+   "名称": "openrouter",
+   "协议": "openai-chat",
+   "base_url": "https://openrouter.ai/api/v1",
+   "路径": "/chat/completions",
+   "key_env": "OPENROUTER_API_KEY",
+   "api_key": "",
+   "超时_秒": 300,
+   "重试": 2,
+   "json_object": true,
+   "单价": {
+    "输入": 0,
+    "输出": 0,
+    "缓存读取": 0,
+    "币种": "USD",
+    "单位": "每百万token"
+   },
+   "余额端点": "",
+   "模型可选": [
+    "deepseek/deepseek-chat:free",
+    "qwen/qwen3-8b:free"
+   ],
+   "备注": "有 :free 模型（限速），需注册 key；端点本机可达。"
+  },
+  {
+   "名称": "ollama",
+   "协议": "openai-chat",
+   "base_url": "http://127.0.0.1:11434/v1",
+   "路径": "/chat/completions",
+   "key_env": "",
+   "api_key": "",
+   "鉴权": "none",
+   "超时_秒": 600,
+   "重试": 1,
+   "json_object": true,
+   "单价": {
+    "输入": 0,
+    "输出": 0,
+    "缓存读取": 0,
+    "币种": "CNY",
+    "单位": "每百万token"
+   },
+   "余额端点": "",
+   "模型可选": [
+    "qwen3:8b",
+    "deepseek-r1:14b"
+   ],
+   "备注": "本机 Ollama（需自行安装并 pull 模型）；当前机器未检测到 ollama。"
+  },
+  {
+   "名称": "anthropic",
+   "协议": "anthropic-messages",
+   "base_url": "https://api.anthropic.com",
+   "路径": "/v1/messages",
+   "key_env": "ANTHROPIC_API_KEY",
+   "api_key": "",
+   "超时_秒": 300,
+   "重试": 2,
+   "json_object": false,
+   "单价": {
+    "输入": 0,
+    "输出": 0,
+    "缓存读取": 0,
+    "币种": "USD",
+    "单位": "每百万token"
+   },
+   "余额端点": "",
+   "模型可选": [
+    "claude-sonnet-4-5",
+    "claude-opus-4-1"
+   ],
+   "备注": "Claude 官方；本机需能直连 api.anthropic.com（未验证）。"
+  },
+  {
+   "名称": "gemini",
+   "协议": "gemini-generate",
+   "base_url": "https://generativelanguage.googleapis.com",
+   "路径": "/v1beta/models/{model}:generateContent",
+   "key_env": "GEMINI_API_KEY",
+   "api_key": "",
+   "超时_秒": 180,
+   "重试": 2,
+   "json_object": true,
+   "单价": {
+    "输入": 0,
+    "输出": 0,
+    "缓存读取": 0,
+    "币种": "USD",
+    "单位": "每百万token"
+   },
+   "余额端点": "",
+   "模型可选": [
+    "gemini-2.5-pro",
+    "gemini-2.5-flash"
+   ],
+   "备注": "Gemini 官方；协议已实现但本机实测 15s 超时不可达，需自备网络条件与 key。"
+  }
+ ],
+ "说明": "改模型不改代码：新增任意 OpenAI 兼容端点只需在 providers 里加一段，再用 profiles 组合出「研判/复核」两档；profiles_by_phase 可按 prep/live/post 分时段指定 profile。每个角色里的「参数」会原样并入请求体（OpenAI/Anthropic 顶层；Gemini 并入 generationConfig），可用来传 provider 私有开关，例如推理档位、thinking 开关、top_p 等；留空即不发。推理型模型若「只有 reasoning 没有正文」，调大该档 max_tokens 即可。key 优先级：--api-key > 环境变量(key_env / AI_PLAN_API_KEY / DEEPSEEK_API_KEY) > provider.api_key > Desktop\\token.txt 首行。"
+}

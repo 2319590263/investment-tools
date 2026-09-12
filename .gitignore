@@ -5,6 +5,8 @@
 账户配置.json
 # 券商真实持仓（个人财务数据）
 持仓数据.md
+# 自选股（个人关注标的）
+自选股.md
 # 通用凭据兜底
 token.txt
 *.env
@@ -14,11 +16,18 @@ credentials*
 secrets*.json
 
 # ---- 运行产物 / 生成数据 ----
+.venv-holdings/
 data/
 !data/.gitkeep
 __pycache__/
 *.py[cod]
 *.pyo
+build/
+tmp/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+node_modules/
 
 # ---- 编辑器 / 系统 ----
 .vscode/
@@ -29,5 +38,7 @@ desktop.ini
 
 # ---- 临时 ----
 *.tmp
+*.bak
 *.log
 ~$*
+

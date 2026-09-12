@@ -1,0 +1,8 @@
+# 运行依赖：无。
+#
+# 本项目（aiplan.py / pan.py / stock3d.py / src/webui）全部只用 Python 标准库：
+#   http.server、urllib.request、json、argparse、threading、subprocess、zipfile …
+# 因此这里保持为空是**有意为之**，不是漏写：
+#   pip install -r requirements.txt      # 不需要，装了也不会新增任何包
+#
+# 环境要求：Python 3.9+（开发机 3.11.9）。可选开发工具见 requirements-dev.txt。

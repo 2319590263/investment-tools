@@ -9,7 +9,7 @@ python pan.py prep                     # 盘前（外围/汇率利率/大宗/宏
 python pan.py live                     # 盘中单次快照（指数量能/情绪/资金/板块轮动）
 python pan.py post                     # 盘后复盘 + 次日前瞻
 python pan.py all                      # 三段合并写一个 JSON
-python pan.py post --pool 持仓数据.md   # 附加个股复盘
+python pan.py post --pool data\user\持仓数据.md   # 附加个股复盘
 python pan.py prep --date 2026-09-14   # 指定交易日
 ```
 
