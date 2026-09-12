@@ -14,6 +14,8 @@ token.txt
 credentials*
 *_credentials.json
 secrets*.json
+# 局域网访问口令（本地文件，不入库）
+webui配置.json
 
 # ---- 运行产物 / 生成数据 ----
 .venv-holdings/

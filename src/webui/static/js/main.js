@@ -1,5 +1,6 @@
 /* 入口：装配各视图初始化与导航。 */
-import { State, refreshState, showView } from "./core/app.js";
+import { refreshState, showView } from "./core/app.js";
+import { bindMobileNav, closeMobileMore, initMobileShell } from "./core/mobile.js";
 import { $, $$ } from "./core/util.js";
 import { closeModal } from "./ui/modal.js";
 import { initConsoleView } from "./views/console.js";
@@ -14,9 +15,14 @@ import { initWatchView } from "./views/watch.js";
 
 export function initNav() {
   $$("#nav .nav-item").forEach(b => b.addEventListener("click", () => showView(b.dataset.view)));
+  bindMobileNav(showView);
   $("#modal-close").addEventListener("click", closeModal);
   $("#overlay").addEventListener("click", e => { if (e.target.id === "overlay") closeModal(); });
-  document.addEventListener("keydown", e => { if (e.key === "Escape") closeModal(); });
+  document.addEventListener("keydown", e => {
+    if (e.key !== "Escape") return;
+    closeMobileMore();
+    closeModal();
+  });
   $("#btn-hist-reload").addEventListener("click", loadHistory);
   const trashBtn = $("#btn-trash-reload");
   if (trashBtn) trashBtn.addEventListener("click", loadTrash);
@@ -28,6 +34,7 @@ export function initNav() {
 }
 
 export async function init() {
+  initMobileShell();
   initNav();
   initConsoleView();
   initRunView();
@@ -36,9 +43,10 @@ export async function init() {
   initWatchView();
   initPickView();
   await refreshState();
+  const initialView = showView("console");
   await refreshReports();
   await loadLatestReport();
-  if (State.report) showView("run");
+  await initialView;
 }
 
 /* 模块脚本本身就是 defer，正常会在 DOMContentLoaded 之前执行；

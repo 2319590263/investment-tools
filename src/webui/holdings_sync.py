@@ -239,7 +239,7 @@ _CAPTCHA_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 
 def captcha_paths(root: str, captcha_id: str) -> dict:
     if not _CAPTCHA_ID_RE.fullmatch(str(captcha_id or "")):
-        raise holdings_ths.SyncError("验证码会话 ID 无效", EXIT_FETCH_FAILED)
+        raise holdings_ths.SyncError("验证码会话 ID 无效", 400)
     base = os.path.join(root, captcha_id)
     return {
         "base": base,
@@ -269,7 +269,7 @@ def _cleanup_captcha(root: str, max_age_seconds: int = 86400) -> None:
 def create_captcha_request(root: str, image: bytes, ttl: int = CAPTCHA_TIMEOUT) -> dict:
     """保存验证码图片与等待会话；返回可安全发给 WebUI 的元数据。"""
     if not image:
-        raise holdings_ths.SyncError("验证码截图为空", EXIT_FETCH_FAILED)
+        raise holdings_ths.SyncError("验证码截图为空", 400)
     _cleanup_captcha(root)
     captcha_id = secrets.token_hex(16)
     paths = captcha_paths(root, captcha_id)
@@ -328,10 +328,17 @@ def wait_captcha_answer(root: str, captcha_id: str, timeout: int,
             if code:
                 return code
         time.sleep(max(0.1, poll_seconds))
+    for key in ("answer", "image", "request"):
+        try:
+            if os.path.isfile(paths[key]):
+                os.remove(paths[key])
+        except OSError:
+            pass
     raise holdings_ths.SyncError("等待人工填写验证码超时（%d 秒）" % timeout, EXIT_FETCH_FAILED)
 
 
-def build_captcha_handler(root: str, timeout: int, log: Callable[[str], None]) -> Callable[[int, str], None]:
+def build_captcha_handler(root: str, timeout: int, log: Callable[[str], None],
+                          prompt: bool = False) -> Callable[[int, str], None]:
     """构造抓取进程侧回调：截图→通知 WebUI→等待填写→提交同花顺。"""
     def handler(hwnd: int, title: str) -> None:
         for attempt in range(1, 4):
@@ -342,7 +349,18 @@ def build_captcha_handler(root: str, timeout: int, log: Callable[[str], None]) -
             marker["message"] = "同花顺要求人工填写复制验证码"
             log("[CAPTCHA] 同花顺要求人工填写验证码，已发送到 WebUI（第 %d 次）" % attempt)
             log(CAPTCHA_PREFIX + json.dumps(marker, ensure_ascii=False))
-            code = wait_captcha_answer(root, request["id"], timeout)
+            if prompt:
+                log("[CAPTCHA] 请在终端输入图片中的验证码")
+                try:
+                    sys.stderr.write("验证码> ")
+                    sys.stderr.flush()
+                    code = sys.stdin.readline().strip()
+                    if not code:
+                        raise EOFError("empty")
+                except (EOFError, KeyboardInterrupt) as exc:
+                    raise holdings_ths.SyncError("终端验证码输入已取消", EXIT_FETCH_FAILED) from exc
+            else:
+                code = wait_captcha_answer(root, request["id"], timeout)
             holdings_ths.submit_captcha(hwnd, code)
             time.sleep(1.0)
             if not holdings_ths.captcha_window_info():
@@ -399,7 +417,7 @@ def run_sync(preview: bool = False, exe_path: str | None = None,
              capture_fn: Callable[..., dict] | None = None,
              root: str | None = None, now: datetime | None = None,
              trading_day: bool | None = None, skip_trades: bool = False,
-             captcha_timeout: int = CAPTCHA_TIMEOUT) -> dict:
+             captcha_timeout: int = CAPTCHA_TIMEOUT, captcha_prompt: bool = False) -> dict:
     """执行一次同步；preview=True 时只抓取、校验和返回，不写任何业务文件。"""
     log = log or print
     context = _context(root)
@@ -419,7 +437,8 @@ def run_sync(preview: bool = False, exe_path: str | None = None,
     if capture_fn is None:
         ensure_dependencies()
         log("[..] 正在读取同花顺资金和持仓%s…" % ("、当日成交" if fetch_trades else ""))
-        captcha_handler = build_captcha_handler(context["captcha_root"], captcha_timeout, log)
+        captcha_handler = build_captcha_handler(context["captcha_root"], captcha_timeout, log,
+                                               prompt=captcha_prompt)
         captured = holdings_ths.capture(exe_path, context["cache"], log,
                                         include_trades=fetch_trades,
                                         captcha_handler=captcha_handler)
@@ -548,6 +567,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-trades", action="store_true", help="本次跳过当日成交页，减少复制验证")
     parser.add_argument("--captcha-timeout", type=int, default=CAPTCHA_TIMEOUT,
                         help="WebUI 等待人工填写验证码的秒数（默认 %d）" % CAPTCHA_TIMEOUT)
+    parser.add_argument("--no-captcha-prompt", action="store_true",
+                        help="不读取终端输入，等待 WebUI 提交验证码")
     parser.add_argument("--json", action="store_true", help="最终结果输出 JSON")
     args = parser.parse_args(argv)
 
@@ -561,7 +582,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = run_sync(preview=args.preview, exe_path=args.exe, log=collect,
-                          skip_trades=args.no_trades, captcha_timeout=args.captcha_timeout)
+                          skip_trades=args.no_trades, captcha_timeout=args.captcha_timeout,
+                          captcha_prompt=not args.no_captcha_prompt)
         if args.json:
             if logs and not args.preview:
                 # JSON 模式保持 stdout 可机器解析，简要过程写 stderr.
@@ -588,15 +610,3 @@ if __name__ == "__main__":
     except Exception:
         pass
     raise SystemExit(main())
-
-
-
-
-
-
-
-
-
-
-
-

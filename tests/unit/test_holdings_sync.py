@@ -109,6 +109,25 @@ class TestNormalizeAndValidate(unittest.TestCase):
         self.assertIsInstance(warnings, list)
 
 
+class TestCaptchaSession(unittest.TestCase):
+
+    def test_manual_captcha_request_answer_roundtrip(self):
+        with tempfile.TemporaryDirectory() as root:
+            request = sync.create_captcha_request(root, b"fake-png", ttl=30)
+            self.assertEqual(len(request["id"]), 32)
+            self.assertEqual(sync.captcha_image(root, request["id"]), b"fake-png")
+            sync.submit_captcha_answer(root, request["id"], "a1b2")
+            self.assertEqual(sync.wait_captcha_answer(root, request["id"], 5, poll_seconds=0.01), "a1b2")
+            paths = sync.captcha_paths(root, request["id"])
+            self.assertFalse(os.path.exists(paths["answer"]))
+
+    def test_captcha_rejects_invalid_id_and_code(self):
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaises(ths.SyncError):
+                sync.captcha_paths(root, "../escape")
+            with self.assertRaises(ths.SyncError):
+                sync.create_captcha_request(root, b"", ttl=30)
+
 class TestRenderingAndPersistence(unittest.TestCase):
 
     def test_holdings_round_trip(self):
@@ -205,8 +224,3 @@ class TestRenderingAndPersistence(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-
-
-
-
-

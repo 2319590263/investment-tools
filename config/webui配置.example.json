@@ -1,0 +1,4 @@
+{
+  "密码": "改成你自己的口令",
+  "_说明": "局域网模式（python main.py webui --host 0.0.0.0）的登录口令；不填则每次启动随机生成并打印在控制台。优先级：--password > 环境变量 AIPLAN_WEBUI_PASSWORD > 本文件 > 随机生成。"
+}

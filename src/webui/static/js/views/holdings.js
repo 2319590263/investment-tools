@@ -1,10 +1,11 @@
 /* 持仓 / 账户页。 */
 import { api } from "../core/api.js";
 import { refreshState, registerView } from "../core/app.js";
+import { confirmMobileWrite, isMobileShell } from "../core/mobile.js";
 import { $, $$, esc, fmt, fmtMoney, fmtPct, kindClass, num, toast } from "../core/util.js";
 import { closeModal, openModal } from "../ui/modal.js";
 
-const Sync = { jobId: null, timer: null, from: 0, running: false, last: "", captcha: null };
+const Sync = { jobId: null, timer: null, from: 0, running: false, last: "", captcha: null, logCount: 0 };
 let loadedEditorText = "";
 
 export async function loadHoldings() {
@@ -72,6 +73,15 @@ export function renderAccount(a) {
   $("#account-msg").className = a["解析错误"] ? "err" : "";
 }
 
+async function persistAccount(cfg) {
+  const res = await api("/api/account", { method: "POST", body: JSON.stringify({ text: JSON.stringify(cfg, null, 1) }) });
+  if (res.ok) {
+    toast(res["已写入"] ? "账户配置已保存（原文件备份为 .bak）" : "账户配置无变化，未写入", res["已写入"] ? "ok" : "warn");
+    renderAccount(res["配置"]); refreshState();
+  }
+  else { toast(res.error, "bad"); $("#account-msg").textContent = res.error; }
+}
+
 export async function saveAccount() {
   let cfg = {};
   try {
@@ -83,20 +93,25 @@ export async function saveAccount() {
   } catch (e) {
     cfg = {};
   }
+  const changes = [];
   $$("#account-form [data-acc]").forEach(inp => {
     const k = inp.dataset.acc;
+    const oldValue = cfg[k];
     const v = inp.value.trim();
     if (k.endsWith("_pct") || k === "总资金" || k === "佣金最低_元" || k === "最大加仓次数") {
       const n = num(v);
       cfg[k] = n === null ? v : n;
     } else cfg[k] = v;
+    if (String(oldValue == null ? "" : oldValue) !== String(cfg[k] == null ? "" : cfg[k])) changes.push(k);
   });
-  const res = await api("/api/account", { method: "POST", body: JSON.stringify({ text: JSON.stringify(cfg, null, 1) }) });
-  if (res.ok) {
-    toast(res["已写入"] ? "账户配置已保存（原文件备份为 .bak）" : "账户配置无变化，未写入", res["已写入"] ? "ok" : "warn");
-    renderAccount(res["配置"]); refreshState();
-  }
-  else { toast(res.error, "bad"); $("#account-msg").textContent = res.error; }
+  if (!isMobileShell()) return persistAccount(cfg);
+  const detail = changes.length
+    ? "检测到 " + changes.length + " 项字段变化：" + changes.slice(0, 6).join("、") +
+      (changes.length > 6 ? " 等" : "") + "。"
+    : "未检测到字段变化。";
+  confirmMobileWrite("确认保存账户配置",
+    detail + "将写入 config/账户配置.json；服务端会在写入前自动保留 .bak 备份。",
+    () => persistAccount(cfg));
 }
 
 export async function saveHoldings() {
@@ -131,6 +146,41 @@ function syncFailure(job) {
     Sync.last || (job.result && job.result["诊断"]) || "同步失败";
 }
 
+function syncLogClear(message) {
+  const pre = $("#hold-sync-log");
+  pre.innerHTML = '<span class="l-dim">' + esc(message || "等待开始 …") + "</span>";
+  Sync.logCount = 0;
+  $("#hold-sync-log-summary").textContent = message || "等待同步";
+}
+
+function syncLogAppend(line) {
+  const pre = $("#hold-sync-log");
+  if (Sync.logCount === 0) pre.innerHTML = "";
+  const text = (line.text || "").trim();
+  if (!text) return;
+  const row = document.createElement("div");
+  const time = document.createElement("span");
+  time.className = "l-ts";
+  time.textContent = line.t || "";
+  const body = document.createElement("span");
+  if (text.startsWith("[OK]")) body.className = "l-ok";
+  else if (text.startsWith("[WARN]")) body.className = "l-warn";
+  else if (text.startsWith("[FAIL]")) body.className = "l-fail";
+  else if (text.startsWith("[..]")) body.className = "l-stage";
+  else if (text.startsWith("[CAPTCHA]")) body.className = "l-warn";
+  else body.className = "l-dim";
+  body.textContent = text;
+  row.appendChild(time);
+  row.appendChild(body);
+  pre.appendChild(row);
+  pre.scrollTop = pre.scrollHeight;
+  Sync.logCount += 1;
+  $("#hold-sync-log-summary").textContent = Sync.running ? ("运行中 · " + Sync.logCount + " 行") : (Sync.logCount + " 行日志");
+}
+
+function setSyncLogOpen(open) {
+  $("#hold-sync-log-card").open = !!open;
+}
 function setCaptcha(info) {
   Sync.captcha = info || null;
   const button = $("#btn-hold-captcha");
@@ -188,6 +238,7 @@ export async function pollHoldingsSync() {
     (j.lines || []).forEach(line => {
       const text = (line.text || "").trim();
       handleSyncLine(text);
+      if (!text.startsWith("__HOLDINGS_CAPTCHA__ ")) syncLogAppend(line);
       if (text.indexOf("[FAIL]") === 0 || text.indexOf("[WARN]") === 0 || text.indexOf("[CAPTCHA]") === 0) {
         Sync.last = text;
       }
@@ -201,6 +252,7 @@ export async function pollHoldingsSync() {
     }
     setSyncRunning(false);
     setCaptcha(null);
+    setSyncLogOpen(false);
     if (j.status === "canceled") {
       syncStatus("已中断，未继续等待写入", "warn");
       toast("同花顺同步已中断", "warn");
@@ -227,6 +279,8 @@ export async function startHoldingsSync() {
   if ($("#hold-editor").value !== loadedEditorText &&
       !window.confirm("持仓编辑器里有未保存修改，同步会覆盖这些修改。是否继续？")) return;
   Sync.last = "";
+  syncLogClear("正在启动同花顺同步…");
+  setSyncLogOpen(true);
   syncStatus("正在启动…", "muted");
   setSyncRunning(true);
   try {
@@ -237,6 +291,7 @@ export async function startHoldingsSync() {
     pollHoldingsSync();
   } catch (e) {
     setSyncRunning(false);
+    setSyncLogOpen(false);
     syncStatus(e.message, "err");
     toast(e.message, "bad");
   }
@@ -245,6 +300,7 @@ export async function startHoldingsSync() {
 export async function stopHoldingsSync() {
   if (!Sync.jobId) return;
   await api("/api/jobs/" + Sync.jobId + "/cancel", { method: "POST", body: "{}" });
+  syncLogAppend({ t: "", text: "[WARN] 已请求中断同步" });
   syncStatus("正在中断…", "warn");
 }
 
@@ -259,14 +315,23 @@ export function initHoldingsView() {
     openModal("账户配置.json 原文", '<textarea class="editor tall" id="acc-raw">' + esc(a["原文"]) + "</textarea>" +
       '<div class="row" style="margin-top:10px"><button class="btn primary" id="acc-raw-save">保存</button>' +
       '<span class="muted">保存前校验 JSON 合法性</span></div>');
-    $("#acc-raw-save").addEventListener("click", async () => {
+    const saveRaw = async () => {
       const res = await api("/api/account", { method: "POST", body: JSON.stringify({ text: $("#acc-raw").value }) });
       if (res.ok) { toast("已保存", "ok"); closeModal(); loadHoldings(); } else toast(res.error, "bad");
+    };
+    $("#acc-raw-save").addEventListener("click", () => {
+      const text = $("#acc-raw").value;
+      const saveCurrent = async () => {
+        const res = await api("/api/account", { method: "POST", body: JSON.stringify({ text: text }) });
+        if (res.ok) { toast("已保存", "ok"); closeModal(); loadHoldings(); } else toast(res.error, "bad");
+      };
+      if (!isMobileShell()) return saveRaw();
+      confirmMobileWrite("确认保存账户配置",
+        "将以原文覆盖 config/账户配置.json；服务端会在写入前自动保留 .bak 备份。",
+        saveCurrent);
     });
   });
 }
 
 /* 注册给 core/app.js：切到本页时按需加载 / 对外暴露的动作。 */
 registerView("holdings", { onShow: loadHoldings });
-
-

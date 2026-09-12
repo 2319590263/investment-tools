@@ -4,6 +4,7 @@
  * 干什么」与对外动作，这里只通过注册表调用，避免模块之间形成环。
  */
 import { api } from "./api.js";
+import { syncMobileNav } from "./mobile.js";
 import { $, $$, chip, esc, fmt, fmtMoney, toast } from "./util.js";
 
 export const State = {
@@ -12,7 +13,7 @@ export const State = {
   report: null,
   reportTab: "struct",
   job: null,
-  currentView: "run",
+  currentView: "console",
 };
 
 export const VIEW_TITLE = {
@@ -43,8 +44,11 @@ export function showView(name) {
   $$("#nav .nav-item").forEach(b => b.classList.toggle("active", b.dataset.view === name));
   $$(".view").forEach(v => v.classList.toggle("active", v.id === "view-" + name));
   $("#topbar-title").textContent = VIEW_TITLE[name] || name;
+  syncMobileNav(name);
+  const views = $(".views");
+  if (views) views.scrollTop = 0;
   const onShow = viewApi(name).onShow;
-  if (onShow) onShow();
+  return onShow ? onShow() : undefined;
 }
 
 /* =========================================================================

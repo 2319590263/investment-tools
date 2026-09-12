@@ -8,6 +8,7 @@
 | `账户配置.json` | 真实账户配置：总资金、费率、风险偏好。首次使用可从模板复制，或跑 `python main.py aiplan init-account` 生成 |
 | `模型配置.json` | 真实模型配置：providers（含 api_key）与 profiles。可跑 `python main.py aiplan init-models` 生成 |
 | `账户配置.example.json` / `模型配置.example.json` | 脱敏模板：总资金为 0、api_key 为空，只留字段结构 |
+| `webui配置.json` | 局域网访问口令：`{"密码": "..."}`。**源码里没有默认口令**，非本机监听时按 `--password` → 环境变量 `AIPLAN_WEBUI_PASSWORD` → 本文件 → 随机生成 的顺序解析；可从 `webui配置.example.json` 复制 |
 
 个人数据（`持仓数据.md` / `自选股.md`）按「数据与配置分离」放在 `../data/user/`，同样被忽略。
 

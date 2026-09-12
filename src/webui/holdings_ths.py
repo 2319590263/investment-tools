@@ -13,7 +13,6 @@ import time
 from datetime import datetime
 from typing import Any, Callable, Iterable
 
-
 EXIT_CLIENT_NOT_RUNNING = 3
 EXIT_WINDOW_UNAVAILABLE = 4
 EXIT_FETCH_FAILED = 5
@@ -65,7 +64,6 @@ KEYS_TRADES = {
     "market": ("交易市场", "市场"),
 }
 
-
 class SyncError(RuntimeError):
     """带稳定退出码的抓取错误。"""
 
@@ -73,13 +71,11 @@ class SyncError(RuntimeError):
         super().__init__(message)
         self.code = code
 
-
 def _clean_key(value: Any) -> str:
     text = str(value or "").replace("\ufeff", "")
     text = text.replace(" ", "").replace("\u3000", "")
     text = text.replace("（", "(").replace("）", ")").replace("：", ":")
     return text.strip().lower()
-
 
 def pick(row: dict, candidates: Iterable[str]) -> Any:
     """按列名取值，兼容空格、全半角和大小写差异。"""
@@ -90,7 +86,6 @@ def pick(row: dict, candidates: Iterable[str]) -> Any:
         if _clean_key(key) in wanted:
             return value
     return None
-
 
 def to_num(value: Any) -> float | None:
     """宽松数值转换；空值返回 None，避免把抓取缺失误当成 0。"""
@@ -109,11 +104,9 @@ def to_num(value: Any) -> float | None:
     except ValueError:
         return None
 
-
 def to_int(value: Any) -> int | None:
     number = to_num(value)
     return None if number is None else int(round(number))
-
 
 def code6(value: Any) -> str:
     text = str(value or "").strip()
@@ -123,7 +116,6 @@ def code6(value: Any) -> str:
     digits = re.sub(r"\D", "", text)
     return digits if len(digits) == 6 else ""
 
-
 def _rows(raw: Any) -> list[dict]:
     if isinstance(raw, dict):
         return [raw]
@@ -131,11 +123,9 @@ def _rows(raw: Any) -> list[dict]:
         return [x for x in raw if isinstance(x, dict)]
     return []
 
-
 def _first_row(raw: Any) -> dict:
     rows = _rows(raw)
     return rows[0] if rows else {}
-
 
 def _read_static(main: Any, control_id: int) -> float | None:
     try:
@@ -146,7 +136,6 @@ def _read_static(main: Any, control_id: int) -> float | None:
     if re.match(r"^-?[\d,]+(\.\d+)?$", text):
         return to_num(text)
     return None
-
 
 def normalize_balance(raw: Any, main: Any = None) -> dict:
     """把 easytrader 的资金结果归一化为稳定中文结构。"""
@@ -168,7 +157,6 @@ def normalize_balance(raw: Any, main: Any = None) -> dict:
         "在途资金": in_transit,
     }
 
-
 def _frozen_value(row: dict, amount: float | None, available: float | None) -> float | None:
     frozen = to_num(pick(row, KEYS_POSITION["frozen"]))
     if frozen is not None:
@@ -176,7 +164,6 @@ def _frozen_value(row: dict, amount: float | None, available: float | None) -> f
     if amount is None or available is None:
         return None
     return max(0.0, amount - available)
-
 
 def normalize_positions(raw: Any) -> list[dict]:
     """把 easytrader 持仓结果归一化为现有持仓文件的列口径。"""
@@ -218,7 +205,6 @@ def normalize_positions(raw: Any) -> list[dict]:
         })
     return out
 
-
 def _direction(value: Any) -> str:
     text = str(value or "").strip()
     if "买" in text:
@@ -226,7 +212,6 @@ def _direction(value: Any) -> str:
     if "卖" in text:
         return "卖出"
     return text
-
 
 def normalize_trades(raw: Any) -> list[dict]:
     """把 easytrader 当日成交结果归一化并按委托标识去重。"""
@@ -259,14 +244,12 @@ def normalize_trades(raw: Any) -> list[dict]:
         })
     return out
 
-
 def apply_position_ratios(positions: list[dict], balance: dict) -> None:
     total = to_num(balance.get("总资产"))
     for row in positions:
         market_value = to_num(row.get("市值"))
         row["仓位占比(%)"] = (round(market_value / total * 100, 3)
                              if market_value is not None and total else None)
-
 
 def validate(balance: dict, positions: list[dict], trades: list[dict],
              previous_total: float | None = None) -> tuple[list[str], list[str]]:
@@ -338,7 +321,6 @@ def validate(balance: dict, positions: list[dict], trades: list[dict],
         warnings.append("总资产较上次快照变动超过 20%%：%.2f -> %.2f" % (previous, total))
     return errors, warnings
 
-
 def _pick_window(app: Any) -> Any:
     wins = app.windows()
     for win in wins:
@@ -349,7 +331,6 @@ def _pick_window(app: Any) -> Any:
         if "网上股票" in title or "交易系统" in title:
             return win
     return wins[0] if wins else None
-
 
 def find_exe(explicit: str | None = None, cache_path: str | None = None) -> str | None:
     """按显式路径、运行进程、常见路径和缓存定位 xiadan.exe。"""
@@ -384,7 +365,6 @@ def find_exe(explicit: str | None = None, cache_path: str | None = None) -> str 
             pass
     return None
 
-
 def remember_exe(exe_path: str, cache_path: str) -> None:
     """缓存客户端路径；业务数据不进入此文件。"""
     import json
@@ -395,45 +375,110 @@ def remember_exe(exe_path: str, cache_path: str) -> None:
         handle.write("\n")
     os.replace(tmp, cache_path)
 
-
 def captcha_window_info() -> tuple[int, str] | None:
-    """返回当前可见的复制验证码窗口 (hwnd, title)。"""
+    """返回当前可见的复制验证码窗口 (hwnd, title)。
+
+    同花顺不同版本的验证码窗口标题不稳定，因此优先按固定控件 ID 识别：
+    0x965=图片、0x964=输入框。标题只作为兜底条件。
+    """
     try:
         import win32gui
     except ImportError as exc:
         raise SyncError("缺少 pywin32，请先安装 .venv-holdings", EXIT_DEPENDENCY_MISSING) from exc
     found = []
 
+    def has_captcha_controls(hwnd: int) -> bool:
+        hit = {"image": False, "edit": False}
+
+        def child_callback(child: int, _extra: Any) -> bool:
+            if not win32gui.IsWindowVisible(child):
+                return True
+            control_id = win32gui.GetDlgCtrlID(child)
+            if control_id == 0x965:
+                hit["image"] = True
+            elif control_id == 0x964:
+                hit["edit"] = True
+            return not (hit["image"] and hit["edit"])
+
+        try:
+            win32gui.EnumChildWindows(hwnd, child_callback, None)
+        except Exception:
+            return False
+        return hit["image"] and hit["edit"]
+
     def callback(hwnd: int, _extra: Any) -> bool:
+        if not win32gui.IsWindowVisible(hwnd):
+            return True
         title = win32gui.GetWindowText(hwnd)
-        if ("股票复制识别" in title or "复制验证" in title) and win32gui.IsWindowVisible(hwnd):
-            found.append((hwnd, title))
+        if "股票复制识别" in title or "复制验证" in title or has_captcha_controls(hwnd):
+            found.append((hwnd, title or "同花顺复制验证码"))
         return True
 
     win32gui.EnumWindows(callback, None)
     return found[0] if found else None
 
+def wait_for_captcha_window(timeout: float = 3.0) -> tuple[int, str] | None:
+    """短时间等待验证码弹窗出现，容忍复制后页面切换/弹窗延迟。"""
+    deadline = time.monotonic() + max(0.5, timeout)
+    while time.monotonic() < deadline:
+        info = captcha_window_info()
+        if info:
+            return info
+        time.sleep(0.2)
+    return None
 
 def captcha_windows() -> list[str]:
     """兼容旧调用：只返回可见验证码窗口标题。"""
     found = captcha_window_info()
     return [found[1]] if found else []
 
+def _find_child_control(hwnd: int, control_id: int) -> int | None:
+    found = []
+
+    def callback(child: int, _extra: Any) -> bool:
+        if win32gui.GetDlgCtrlID(child) == control_id and win32gui.IsWindowVisible(child):
+            found.append(child)
+            return False
+        return True
+
+    import win32gui
+    win32gui.EnumChildWindows(hwnd, callback, None)
+    return found[0] if found else None
 
 def capture_captcha_image(hwnd: int) -> bytes:
-    """截取验证码图片，返回 PNG 字节；只读取窗口，不触碰剪贴板。"""
+    """按控件屏幕坐标截取验证码图片。
+
+    pywinauto 的 capture_as_image() 对同花顺这个自绘窗口实测会返回全黑区域，
+    这里改用 GetWindowRect + ImageGrab，并在单色/空白时短暂重试。
+    """
     import io
+    import statistics
     try:
-        from pywinauto import Desktop
+        import win32gui
+        from PIL import ImageGrab
     except ImportError as exc:
-        raise SyncError("缺少 pywinauto，请先安装 .venv-holdings", EXIT_DEPENDENCY_MISSING) from exc
+        raise SyncError("缺少 Pillow / pywin32，请先安装 .venv-holdings",
+                        EXIT_DEPENDENCY_MISSING) from exc
     try:
-        window = Desktop(backend="win32").window(handle=hwnd)
-        try:
-            control = window.child_window(control_id=0x965, class_name="Static")
-            image = control.capture_as_image()
-        except Exception:
-            image = window.capture_as_image()
+        control_hwnd = _find_child_control(hwnd, 0x965)
+        if not control_hwnd:
+            raise RuntimeError("未找到验证码图片控件 0x965")
+        image = None
+        for _attempt in range(4):
+            left, top, right, bottom = win32gui.GetWindowRect(control_hwnd)
+            if right - left < 8 or bottom - top < 8:
+                time.sleep(0.2)
+                continue
+            # 向内收 1 像素，避开控件边框。
+            image = ImageGrab.grab(bbox=(left + 1, top + 1, right - 1, bottom - 1), all_screens=True)
+            gray = image.convert("L")
+            values = list(gray.getdata())
+            if values and statistics.pstdev(values) > 3.0:
+                break
+            image = None
+            time.sleep(0.25)
+        if image is None:
+            raise RuntimeError("验证码区域为空或过于单色")
         buffer = io.BytesIO()
         image.save(buffer, format="PNG")
         data = buffer.getvalue()
@@ -445,22 +490,59 @@ def capture_captcha_image(hwnd: int) -> bytes:
     except Exception as exc:  # noqa: BLE001
         raise SyncError("读取验证码图片失败：%s" % exc, EXIT_FETCH_FAILED) from exc
 
-
 def submit_captcha(hwnd: int, code: str) -> None:
-    """把用户手工填写的验证码提交到同花顺验证码窗口。"""
+    """模拟真实键盘填写验证码并点击确定。
+
+    同花顺验证码输入框是自绘控件：实测 WM_SETTEXT、WM_CHAR、GetWindowText
+    都是空操作。因此必须点击控件后发送真实键盘事件，不能后台 set_text。
+    """
     text = str(code or "").strip()
-    if not text or len(text) > 12 or not all(ch.isalnum() for ch in text):
+    if not text or len(text) > 12 or not all(ch.isascii() and ch.isalnum() for ch in text):
         raise SyncError("验证码格式无效", EXIT_FETCH_FAILED)
     try:
+        import pywinauto.keyboard
         from pywinauto import Desktop
+        current = captcha_window_info()
+        if current:
+            hwnd = current[0]
         window = Desktop(backend="win32").window(handle=hwnd)
         edit = window.child_window(control_id=0x964, class_name="Edit")
-        edit.set_edit_text(text)
+        button = window.child_window(control_id=1, class_name="Button")
         window.set_focus()
-        window.type_keys("{ENTER}", set_foreground=False)
+        time.sleep(0.15)
+        edit.click_input()
+        time.sleep(0.08)
+        # 同花顺自绘输入框不响应 Ctrl+A，连续退格可可靠清空旧尝试残留。
+        for _ in range(24):
+            pywinauto.keyboard.send_keys("{BACKSPACE}")
+        pywinauto.keyboard.send_keys(text, pause=0.04)
+        time.sleep(0.15)
+        button.click_input()
     except Exception as exc:  # noqa: BLE001
         raise SyncError("提交验证码失败：%s" % exc, EXIT_FETCH_FAILED) from exc
 
+def close_captcha_window(timeout: float = 3.0) -> bool:
+    """关闭同步前遗留的验证码窗口；返回是否已确认关闭。"""
+    info = captcha_window_info()
+    if not info:
+        return True
+    hwnd = info[0]
+    try:
+        import win32con
+        import win32gui
+        cancel = _find_child_control(hwnd, 2)
+        if cancel:
+            win32gui.SendMessage(cancel, win32con.BM_CLICK, 0, 0)
+        else:
+            win32gui.PostMessage(hwnd, win32con.WM_CLOSE, 0, 0)
+    except Exception:
+        return False
+    deadline = time.monotonic() + max(0.5, timeout)
+    while time.monotonic() < deadline:
+        if not captcha_window_info():
+            return True
+        time.sleep(0.15)
+    return not bool(captcha_window_info())
 
 def check_window(exe_path: str) -> None:
     """确认交易窗口存在且可交互；最小化时静默恢复，不抢前台焦点。"""
@@ -492,7 +574,6 @@ def check_window(exe_path: str) -> None:
     except Exception as exc:
         raise SyncError("交易窗口状态检查失败：%s" % exc, EXIT_WINDOW_UNAVAILABLE) from exc
 
-
 def _silent_switch(self: Any, path: list[str], sleep: float = 1.5) -> None:
     self.close_pop_dialog()
     self._get_left_menus_handle().get_item(path).select()
@@ -505,7 +586,6 @@ def _silent_switch(self: Any, path: list[str], sleep: float = 1.5) -> None:
     except Exception:
         pass
     self.wait(sleep)
-
 
 def connect(exe_path: str) -> tuple[Any, str]:
     """连接已登录客户端，优先 universal_client，失败后回退 ths。"""
@@ -548,7 +628,6 @@ def connect(exe_path: str) -> tuple[Any, str]:
             last_error = exc
     raise SyncError("同花顺客户端连接失败：%s" % last_error, EXIT_FETCH_FAILED)
 
-
 def _activate(exe_path: str) -> None:
     try:
         import win32con
@@ -561,7 +640,6 @@ def _activate(exe_path: str) -> None:
             time.sleep(0.5)
     except Exception:
         return
-
 
 def _shape_ok(kind: str, raw: Any) -> bool:
     """检查当前网格是否真的是目标页面，防止验证码/切页失败时读到旧表。"""
@@ -592,7 +670,6 @@ def _shape_ok(kind: str, raw: Any) -> bool:
         )
     return True
 
-
 def _fetch_with_retry(exe_path: str, getter: Callable[[], Any], name: str,
                       allow_empty: bool, log: Callable[[str], None], kind: str,
                       captcha_handler: Callable[[int, str], None] | None = None) -> Any:
@@ -608,15 +685,20 @@ def _fetch_with_retry(exe_path: str, getter: Callable[[], Any], name: str,
                     raise SyncError("检测到同花顺复制验证码：%s" % info[1], EXIT_FETCH_FAILED)
                 captcha_handler(info[0], info[1])
             result = getter()
-            info = captcha_window_info()
+            info = wait_for_captcha_window(1.5)
             if info:
                 if captcha_handler is None:
                     raise SyncError("检测到同花顺复制验证码：%s" % info[1], EXIT_FETCH_FAILED)
                 captcha_handler(info[0], info[1])
                 result = getter()
             if not _shape_ok(kind, result):
-                raise SyncError("页面结构不匹配（可能被验证码或切页延迟阻断），已立即停止，不重复复制",
-                                EXIT_FETCH_FAILED)
+                info = wait_for_captcha_window(3.0)
+                if info and captcha_handler is not None:
+                    captcha_handler(info[0], info[1])
+                    result = getter()
+                if not _shape_ok(kind, result):
+                    raise SyncError("页面结构不匹配，且未检测到可填写的验证码窗口",
+                                    EXIT_FETCH_FAILED)
             if result or allow_empty:
                 return result
             last_error = RuntimeError("返回空数据")
@@ -629,7 +711,6 @@ def _fetch_with_retry(exe_path: str, getter: Callable[[], Any], name: str,
             break
     raise SyncError("%s 连续 2 次抓取失败：%s" % (name, last_error), EXIT_FETCH_FAILED)
 
-
 def capture(exe_path: str | None = None, cache_path: str | None = None,
             log: Callable[[str], None] | None = None, include_trades: bool = True,
             captcha_handler: Callable[[int, str], None] | None = None) -> dict:
@@ -640,11 +721,12 @@ def capture(exe_path: str | None = None, cache_path: str | None = None,
         raise SyncError("未找到正在运行的 xiadan.exe，请先打开并登录同花顺交易界面",
                         EXIT_CLIENT_NOT_RUNNING)
     check_window(exe)
-    info = captcha_window_info()
-    if info:
-        if captcha_handler is None:
-            raise SyncError("同花顺正在等待复制验证码：%s" % info[1], EXIT_FETCH_FAILED)
-        captcha_handler(info[0], info[1])
+    stale_captcha = captcha_window_info()
+    if stale_captcha:
+        log("[WARN] 检测到同步前已存在的验证码窗口，先关闭旧窗口")
+        if not close_captcha_window():
+            raise SyncError("无法关闭遗留验证码窗口，请手动关闭后重试", EXIT_FETCH_FAILED)
+        log("[OK] 遗留验证码窗口已关闭，继续发起本次同步")
     user, mode = connect(exe)
     log("[OK] 已连接同花顺：%s（模式 %s）" % (exe, mode))
     try:
@@ -673,12 +755,3 @@ def capture(exe_path: str | None = None, cache_path: str | None = None,
         "抓取时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "跳过": {} if include_trades else {"当日成交": "已跳过"},
     }
-
-
-
-
-
-
-
-
-

@@ -6,7 +6,7 @@
  * 需要 Node 18+ 与 playwright（npm i playwright）。没装时直接 SKIP（退出码 0）。
  * 跑之前先启动控制台（python main.py webui）。截图输出到 build/ui-smoke-<view>.png。
  *
- * 检查两层：① 八个视图切得动且各自渲染出真实内容（不是空壳）；
+ * 检查两层：① 九个视图切得动且各自渲染出真实内容（不是空壳）；
  *          ② 报告页三个页签 + K 线画布这类重交互不回归；全程 0 个 console error。
  */
 
@@ -69,7 +69,8 @@ const gotoView = async (view) => {
 };
 
 await page.goto(BASE, { waitUntil: "domcontentloaded" });
-await page.waitForSelector("#view-run", { timeout: 20000 });
+await page.waitForSelector("#view-console.active", { timeout: 20000 });
+console.log("PASS  桌面默认首页为总控台");
 mkdirSync("build", { recursive: true });
 
 for (const view of VIEWS) {

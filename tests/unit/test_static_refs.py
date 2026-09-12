@@ -62,6 +62,8 @@ class TestStaticRefs(unittest.TestCase):
                 if "://" not in r and not r.startswith("#")]
         self.assertTrue(rels, "页面没有引用任何本地资源？")
         for rel in rels:
+            if rel in ("/", "/m", "/m/"):
+                continue
             target = os.path.join(STATIC, rel.lstrip("/").replace("/", os.sep))
             self.assertTrue(os.path.isfile(target), "静态资源不存在：%s" % rel)
 

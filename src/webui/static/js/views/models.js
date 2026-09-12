@@ -1,6 +1,7 @@
 /* 模型配置页。 */
 import { api } from "../core/api.js";
 import { State, refreshState, registerView } from "../core/app.js";
+import { confirmMobileWrite, isMobileShell } from "../core/mobile.js";
 import { $, chip, esc, toast } from "../core/util.js";
 
 export async function loadModels() {
@@ -48,14 +49,33 @@ export function roleLine(role, c) {
     " · max_tokens " + (c.max_tokens == null ? "—" : c.max_tokens) + esc(params) + "</span></div>";
 }
 
-export async function saveModels() {
-  const res = await api("/api/models", { method: "POST", body: JSON.stringify({ text: $("#models-editor").value }) });
+async function persistModels(text) {
+  const res = await api("/api/models", { method: "POST", body: JSON.stringify({ text: text }) });
   if (res.ok) {
     toast(res["已写入"] ? "模型配置已保存" : "模型配置无变化，未写入", res["已写入"] ? "ok" : "warn");
     $("#models-msg").textContent = res["已写入"] ? "已保存，备份为 模型配置.json.bak" : "内容与文件一致，未写入、未产生备份";
     loadModels(); refreshState();
   }
   else { toast(res.error, "bad"); $("#models-msg").textContent = res.error; }
+}
+
+export async function saveModels() {
+  const text = $("#models-editor").value;
+  if (!isMobileShell()) return persistModels(text);
+  const lines = text ? text.split(/\r?\n/).length : 0;
+  let shape = "当前 JSON 可由服务端继续校验";
+  try {
+    const parsed = JSON.parse(text);
+    const providers = Array.isArray(parsed && parsed.providers) ? parsed.providers.length : 0;
+    const profiles = parsed && parsed.profiles && typeof parsed.profiles === "object"
+      ? Object.keys(parsed.profiles).length : 0;
+    shape = "JSON 格式有效，包含 " + providers + " 个 provider / " + profiles + " 个 profile";
+  } catch (e) {
+    shape = "当前内容不是合法 JSON，服务端会拒绝写入";
+  }
+  confirmMobileWrite("确认保存模型配置",
+    "将覆盖 config/模型配置.json（" + lines + " 行；" + shape + "）。服务端会在写入前自动保留 .bak 备份。",
+    () => persistModels(text));
 }
 
 export async function checkModel() {

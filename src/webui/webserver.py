@@ -3,12 +3,17 @@
 
 from http.server import BaseHTTPRequestHandler
 from http.server import ThreadingHTTPServer
+from http.cookies import SimpleCookie
 from urllib.parse import parse_qs
 from urllib.parse import unquote
 from urllib.parse import urlparse
+import hmac
+import ipaddress
 import json
 import os
 import re
+import secrets
+import socket
 import threading
 import webbrowser
 
@@ -38,12 +43,115 @@ MIME = {
 }
 
 
+LOGIN_COOKIE = "aiplan_session"
+
+
+LAN_PASSWORD_ENV = "AIPLAN_WEBUI_PASSWORD"
+LAN_PASSWORD_FILE = os.path.join(ROOT, "config", "webui配置.json")
+
+
+def resolve_lan_password(explicit=None):
+    """局域网口令来源：--password > 环境变量 > config/webui配置.json > 随机生成。
+
+    源码里不留默认口令：仓库是公开的，写死的口令等于没有密码。
+    """
+    if explicit:
+        return explicit, "--password"
+    from_env = os.environ.get(LAN_PASSWORD_ENV, "").strip()
+    if from_env:
+        return from_env, "环境变量 %s" % LAN_PASSWORD_ENV
+    try:
+        with open(LAN_PASSWORD_FILE, "r", encoding="utf-8-sig") as fh:
+            saved = json.load(fh)
+        value = str(saved.get("密码") or saved.get("password") or "").strip()
+        if value:
+            return value, rel(LAN_PASSWORD_FILE)
+    except (OSError, ValueError, AttributeError):
+        pass
+    return secrets.token_urlsafe(6), "随机生成（本次运行有效）"
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "aiplan-webui/1.0"
     protocol_version = "HTTP/1.1"
 
     def log_message(self, fmt, *args):  # 静默默认访问日志
         pass
+
+    # ---- 局域网密码校验 ----
+    def _password(self):
+        return getattr(self.server, "password", None)
+
+    def _session_token(self):
+        return getattr(self.server, "session_token", None)
+
+    def _authorized(self):
+        if not self._password():
+            return True
+        session_token = self._session_token()
+        if not session_token:
+            return False
+        try:
+            cookie = SimpleCookie(self.headers.get("Cookie", ""))
+            supplied = cookie[LOGIN_COOKIE].value
+        except (KeyError, TypeError):
+            return False
+        return hmac.compare_digest(str(supplied), session_token)
+
+    @staticmethod
+    def _safe_next_path(path):
+        """只允许回到控制台的已知入口，避免开放重定向。"""
+        path = unquote(path or "")
+        return path if path in ("/", "/m", "/m/") else "/"
+
+    def _login_page(self, error=False, next_path="/"):
+        error_html = '<p class="error">密码错误，请重新输入。</p>' if error else ""
+        next_path = self._safe_next_path(next_path)
+        body = """<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>登录 aiplan</title>
+<style>body{font:16px/1.7 system-ui,sans-serif;background:#f6f7f9;color:#20242a;margin:0}.box{max-width:360px;margin:12vh auto;background:#fff;padding:28px;border:1px solid #dfe3e8;border-radius:12px;box-shadow:0 8px 30px #0000000d}h2{margin:0 0 8px}.tip{color:#68707a;margin:0 0 20px}label{display:block;font-weight:600;margin-bottom:7px}input{box-sizing:border-box;width:100%;font:inherit;padding:11px 12px;border:1px solid #c8ced6;border-radius:8px}button{width:100%;font:inherit;font-weight:600;padding:11px 12px;margin-top:16px;border:0;border-radius:8px;background:#1769aa;color:#fff;cursor:pointer}.error{color:#c62828;margin:0 0 14px}</style>
+<div class="box"><h2>登录 aiplan Web</h2><p class="tip">请输入局域网访问密码。</p>__ERROR__
+<form method="post" action="/__login"><input type="hidden" name="next" value="__NEXT__"><label for="password">访问密码</label>
+<input id="password" name="password" type="password" autocomplete="current-password" autofocus required>
+<button type="submit">登录</button></form></div></html>"""
+        body = body.replace("__ERROR__", error_html).replace("__NEXT__", next_path)
+        self._send(401 if error else 200, body, "text/html; charset=utf-8")
+
+    def _login(self):
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        raw = self.rfile.read(length) if length > 0 else b""
+        form = parse_qs(raw.decode("utf-8", "replace"))
+        supplied = (form.get("password") or [""])[0]
+        next_path = self._safe_next_path((form.get("next") or ["/"])[0])
+        expected = self._password() or ""
+        if not hmac.compare_digest(supplied, expected):
+            return self._login_page(error=True, next_path=next_path)
+        self.send_response(303)
+        self.send_header("Location", next_path)
+        self.send_header("Set-Cookie",
+                         "%s=%s; Path=/; HttpOnly; SameSite=Strict; Max-Age=604800" %
+                         (LOGIN_COOKIE, self._session_token()))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _deny_access(self):
+        if self.path.startswith("/api/"):
+            return self._json({"ok": False, "error": "未登录：请先在登录页输入访问密码"}, 401)
+        path = unquote(urlparse(self.path).path)
+        return self._login_page(next_path=self._safe_next_path(path))
+
+    def _check_access(self):
+        """返回 True 表示请求可以继续；否则已经写回登录页或 401。"""
+        if not self._password():
+            return True
+        if self._authorized():
+            return True
+        self._deny_access()
+        return False
 
     # ---- 基础输出 ----
     def _send(self, code, body, ctype="application/json; charset=utf-8"):
@@ -80,6 +188,10 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- GET ----
     def do_GET(self):
+        if unquote(urlparse(self.path).path) == "/__login":
+            return self._login_page()
+        if not self._check_access():
+            return
         u = urlparse(self.path)
         path = unquote(u.path)
         q = parse_qs(u.query)
@@ -228,6 +340,11 @@ class Handler(BaseHTTPRequestHandler):
 
     # ---- POST ----
     def do_POST(self):
+        path = unquote(urlparse(self.path).path)
+        if path == "/__login":
+            return self._login()
+        if not self._check_access():
+            return
         u = urlparse(self.path)
         path = unquote(u.path)
         try:
@@ -390,7 +507,7 @@ class Handler(BaseHTTPRequestHandler):
                 py = holdings_python()
                 if not py:
                     return self._err(install_hint())
-                argv = [py, "-X", "utf8", "-m", "webui.holdings_sync", "sync"]
+                argv = [py, "-X", "utf8", "-m", "webui.holdings_sync", "sync", "--no-captcha-prompt"]
                 meta = {"label": "同步同花顺持仓", "只读": True}
                 job = JOBS.start(kind, argv, meta, label="同步同花顺持仓（只读）")
                 return self._json({"ok": True, "id": job["id"], "命令": job["命令"]})
@@ -430,6 +547,8 @@ class Handler(BaseHTTPRequestHandler):
     def _static(self, path):
         if path in ("/", ""):
             path = "/index.html"
+        elif path in ("/m", "/m/"):
+            path = "/index.html"
         rel_path = path.lstrip("/")
         target = os.path.abspath(os.path.join(STATIC_DIR, rel_path))
         if not inside(target, STATIC_DIR) or not os.path.isfile(target):
@@ -446,30 +565,84 @@ class LocalServer(ThreadingHTTPServer):
     allow_reuse_address = (os.name != "nt")
     daemon_threads = True
 
+    def __init__(self, server_address, RequestHandlerClass, password=None):
+        self.password = password
+        self.session_token = secrets.token_urlsafe(32) if password else None
+        super().__init__(server_address, RequestHandlerClass)
 
-def pick_port(host, port):
+
+def pick_port(host, port, password=None):
     for candidate in range(port, port + 20):
         try:
-            srv = LocalServer((host, candidate), Handler)
+            srv = LocalServer((host, candidate), Handler, password=password)
             return candidate, srv
         except OSError:
             continue
     raise SystemExit("端口 %d-%d 都被占用，请用 --port 指定其它端口" % (port, port + 20))
 
 
-def serve(host="127.0.0.1", port=8765, open_browser=True):
+def _is_loopback_host(host):
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _lan_ips():
+    """返回可用于局域网访问的本机 IPv4 地址，优先默认路由接口。"""
+    try:
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.connect(("8.8.8.8", 80))
+            ip = sock.getsockname()[0]
+            if not ip.startswith("127."):
+                return [ip]
+        finally:
+            sock.close()
+    except OSError:
+        pass
+    found = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip not in found and not ip.startswith("127."):
+                found.append(ip)
+    except OSError:
+        pass
+    return found
+
+
+def serve(host="127.0.0.1", port=8765, open_browser=True, password=None):
     """启动本地控制台（阻塞直到 Ctrl+C）。参数与 argparse 入口解耦，方便测试。"""
     if not os.path.exists(AIPLAN):
         raise SystemExit("找不到 aiplan.py：%s" % AIPLAN)
-    port, httpd = pick_port(host, port)
-    url = "http://%s:%d/" % (host, port)
+    lan_source = None
+    if password is None and not _is_loopback_host(host):
+        password, lan_source = resolve_lan_password(password)
+    port, httpd = pick_port(host, port, password=password)
+    display_host = "127.0.0.1" if host in ("0.0.0.0", "::", "localhost", "") else host
+    local_url = "http://%s:%d/" % (display_host, port)
+    if host in ("0.0.0.0", "::"):
+        lan_urls = ["http://%s:%d/" % (ip, port) for ip in _lan_ips()]
+    else:
+        lan_urls = []
     purge_trash_expired(force=True, log=lambda m: print(m))
-    print("[OK] aiplan Web UI  ->  %s" % url)
+    print("[OK] aiplan Web UI  ->  %s" % local_url)
+    print("[MOBILE] 手机专用页面 ->  %sm" % local_url)
+    for url in lan_urls:
+        print("[LAN] 同局域网设备 ->  %s" % url)
+        print("[LAN] 手机专用页面 ->  %sm" % url)
+    if password:
+        print("[安全] 访问密码：%s（来源：%s）" % (password, lan_source or "--password"))
+        print("[安全] 会话最长保持 7 天；可把口令写进 %s 或环境变量 %s"
+              % (rel(LAN_PASSWORD_FILE), LAN_PASSWORD_ENV))
     print("     root: %s" % ROOT.encode("ascii", "replace").decode("ascii"))
     print("     python: %s" % PYTHON.encode("ascii", "replace").decode("ascii"))
     print("     Ctrl+C to stop")
     if open_browser:
-        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+        threading.Timer(0.8, lambda: webbrowser.open(local_url)).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
@@ -477,5 +650,3 @@ def serve(host="127.0.0.1", port=8765, open_browser=True):
     finally:
         httpd.server_close()
     return 0
-
-

@@ -6,8 +6,9 @@
 <title>aiplan 研判控制台</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <link rel="stylesheet" href="/styles.css" />
+<link rel="stylesheet" href="/mobile.css" />
 </head>
-<body>
+<body data-shell="desktop">
 <div class="app">
 
   <aside class="side">
@@ -16,8 +17,8 @@
       <div class="brand-text"><strong>aiplan</strong><span>研判控制台</span></div>
     </div>
     <nav class="nav" id="nav">
-      <button class="nav-item" data-view="console"><i>⌂</i>总控台</button>
-      <button class="nav-item active" data-view="run"><i>▶</i>运行研判</button>
+      <button class="nav-item active" data-view="console"><i>⌂</i>总控台</button>
+      <button class="nav-item" data-view="run"><i>▶</i>运行研判</button>
       <button class="nav-item" data-view="report"><i>▤</i>报告</button>
       <button class="nav-item" data-view="history"><i>◷</i>历史与复盘</button>
       <button class="nav-item" data-view="holdings"><i>◈</i>持仓 / 账户</button>
@@ -31,15 +32,16 @@
 
   <main class="main">
     <header class="topbar">
-      <div class="topbar-title" id="topbar-title">运行研判</div>
+      <div class="topbar-title" id="topbar-title">总控台</div>
       <div class="topbar-meta" id="topbar-meta"></div>
+      <a class="desktop-mobile-link" href="/m">手机版</a>
       <button class="bell" id="btn-alerts" title="消息队列（到价提醒）">🔔<span class="bell-count" id="alert-count" hidden>0</span></button>
     </header>
 
     <div class="views">
 
       <!-- ================= 运行 ================= -->
-      <section class="view" id="view-console">
+      <section class="view active" id="view-console">
         <div class="card" id="console-nudge" hidden>
           <div class="card-b row">
             <span id="console-nudge-text"></span>
@@ -99,7 +101,7 @@
         </div>
       </section>
 
-      <section class="view active" id="view-run">
+      <section class="view" id="view-run">
         <div class="grid-run">
           <div class="card">
             <div class="card-h"><span>标的与时点</span><span class="muted">选时段 + 填代码就能跑</span></div>
@@ -253,6 +255,10 @@
             <button class="btn primary" id="btn-hold-sync">同步同花顺</button></div>
           <div class="card-b table-wrap"><table class="tbl" id="hold-table"></table></div>
         </div>
+        <details class="card sync-log-card" id="hold-sync-log-card">
+          <summary class="card-h"><span>同花顺同步日志</span><span class="muted" id="hold-sync-log-summary">等待同步</span></summary>
+          <div class="card-b"><pre class="console" id="hold-sync-log"><span class="l-dim">等待开始 …</span></pre></div>
+        </details>
         <div class="grid-2">
           <div class="card">
             <div class="card-h"><span>账户配置</span>
@@ -432,6 +438,27 @@
   </main>
 </div>
 
+<nav class="mobile-nav" id="mobile-nav" aria-label="移动端主导航">
+  <button class="mobile-nav-item" data-view="console"><i>⌂</i><span>总控台</span></button>
+  <button class="mobile-nav-item" data-view="run"><i>▶</i><span>研判</span></button>
+  <button class="mobile-nav-item" data-view="report"><i>▤</i><span>报告</span></button>
+  <button class="mobile-nav-item" data-view="holdings"><i>◈</i><span>持仓</span></button>
+  <button class="mobile-nav-item" id="mobile-more-toggle" aria-expanded="false" aria-controls="mobile-more"><i>＋</i><span>更多</span></button>
+</nav>
+
+<div class="mobile-sheet-backdrop" id="mobile-sheet-backdrop" hidden></div>
+<section class="mobile-sheet" id="mobile-more" aria-label="更多功能" hidden>
+  <div class="mobile-sheet-h"><b>更多功能</b><button class="btn ghost" id="mobile-more-close">关闭</button></div>
+  <div class="mobile-more-grid">
+    <button class="mobile-more-item" data-view="history"><i>◷</i><span>历史与复盘</span></button>
+    <button class="mobile-more-item" data-view="watch"><i>★</i><span>自选股</span></button>
+    <button class="mobile-more-item" data-view="pick"><i>❖</i><span>荐股</span></button>
+    <button class="mobile-more-item" data-view="models"><i>⚙</i><span>模型配置</span></button>
+    <button class="mobile-more-item" data-view="market"><i>☵</i><span>大盘快照</span></button>
+  </div>
+  <a class="mobile-desktop-link" href="/">返回电脑版</a>
+</section>
+
 <div class="overlay" id="overlay" hidden>
   <div class="modal">
     <div class="modal-h"><span id="modal-title">标题</span><button class="btn ghost" id="modal-close">关闭</button></div>
@@ -444,5 +471,3 @@
 <script type="module" src="/js/main.js"></script>
 </body>
 </html>
-
-

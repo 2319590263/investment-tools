@@ -58,13 +58,22 @@ class TestApiSmoke(unittest.TestCase):
         status, html = self.server.get("/", raw=True)
         self.assertEqual(status, 200)
         self.assertIn("view-pick", html)
+        self.assertIn("mobile-nav", html)
         self.assertIn("/js/main.js", html, "入口应是唯一模块脚本")
+        self.assertIn("/mobile.css", html, "移动专用样式应由同一页面加载")
         for path, needle in (("/js/main.js", "import"), ("/js/views/pick.js", "registerView"),
-                             ("/styles.css", ".view"), ("/favicon.svg", "<svg")):
+                             ("/styles.css", ".view"), ("/mobile.css", "mobile-nav"),
+                             ("/favicon.svg", "<svg")):
             with self.subTest(path=path):
                 status, text = self.server.get(path, raw=True)
                 self.assertEqual(status, 200, path)
                 self.assertIn(needle, text)
+        for path in ("/m", "/m/"):
+            with self.subTest(path=path):
+                status, mobile_html = self.server.get(path, raw=True)
+                self.assertEqual(status, 200, path)
+                self.assertIn('id="mobile-nav"', mobile_html)
+                self.assertIn("/mobile.css", mobile_html)
         status, _ = self.server.get("/app.js", raw=True)
         self.assertEqual(status, 404, "旧的单文件 app.js 应该已下线")
 
@@ -153,4 +162,3 @@ class TestApiSmoke(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
-

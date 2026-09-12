@@ -43,6 +43,7 @@ PACKAGE_MODULES = ("__init__.py", "__main__.py", "paths.py", "sources.py", "stor
                    "alerts.py", "trash.py", "webserver.py", "run_aiplan.py",
                    "holdings_ths.py", "holdings_sync.py")
 JS_MODULES = ("main.js", "core/util.js", "core/api.js", "core/app.js", "core/poller.js",
+              "core/mobile.js",
               "ui/markdown.js", "ui/jsontree.js", "ui/modal.js", "ui/cards.js", "ui/kline.js",
               "ui/stockcard.js", "ui/planprices.js",
               "views/run.js", "views/report.js", "views/history.js", "views/holdings.js",
@@ -91,8 +92,9 @@ def check_layout():
     print("[1] 目录结构")
     must = ("main.py", "README.md", "requirements.txt", "requirements-holdings.txt", ".gitignore", ".editorconfig",
             "启动WebUI.cmd", "docs/README_webui.md", "docs/ARCHITECTURE.md",
+            "src/webui/static/mobile.css",
             "config/账户配置.example.json", "config/模型配置.example.json",
-            "tests/unit", "tests/integration", "tests/ui/ui_smoke.mjs")
+            "tests/unit", "tests/integration", "tests/ui/ui_smoke.mjs", "tests/ui/mobile_smoke.mjs")
     for rel in must:
         (ok if os.path.exists(os.path.join(ROOT, *rel.split("/"))) else bad)("存在 " + rel)
     for name in PACKAGE_MODULES:
@@ -236,6 +238,9 @@ def check_frontend():
     for rel in re.findall(r'(?:src|href)="([^"]+)"', html):
         if "://" in rel or rel.startswith("#"):
             continue
+        if rel in ("/m", "/m/"):
+            ok("静态资源存在 " + rel + "（由 webserver 映射到 index.html）")
+            continue
         target = os.path.join(STATIC, rel.lstrip("/").replace("/", os.sep))
         (ok if os.path.exists(target) else bad)("静态资源存在 " + rel)
 
@@ -248,7 +253,8 @@ def check_secrets():
         print("  SKIP  不是 git 仓库或无跟踪文件，跳过入库密钥扫描")
     patterns = [(r"sk-[A-Za-z0-9._-]{16,}", "疑似明文 API Key"),
                 (r"(?i)bearer\s+[A-Za-z0-9._-]{16,}", "疑似 Bearer Token"),
-                (r'"api_key"\s*:\s*"[^"\s]{8,}"', "非空 api_key 字段")]
+                (r'"api_key"\s*:\s*"[^"\s]{8,}"', "非空 api_key 字段"),
+                (r'(?i)\b(?:default_)?(?:lan_)?password\s*=\s*"[^"]{4,}"', "硬编码口令赋值")]
     hits = []
     for path in files:
         if os.path.splitext(path)[1].lower() not in TEXT_EXT or not os.path.isfile(path):
@@ -262,6 +268,8 @@ def check_secrets():
                 "data/user/自选股.md"):
         code2, _ = git("check-ignore", "-q", rel)
         (ok if code2 == 0 else bad)("已在 .gitignore 忽略 " + rel)
+    code3, _ = git("check-ignore", "-q", "config/webui配置.json")
+    (ok if code3 == 0 else bad)("已在 .gitignore 忽略 config/webui配置.json")
 
 
 def sha256(path):
@@ -315,6 +323,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
-
-

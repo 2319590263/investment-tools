@@ -9,7 +9,7 @@
    `importlib` 按文件路径加载它们（`webui/paths.py` 是唯一入口），不修改其逻辑。
    `python main.py check` 用 `scripts/cli_baseline.json` 的 sha256 守住这条线：
    只有走查过才允许 `--update-baseline` 重新登记。
-3. **本地自用**：只监听 `127.0.0.1`，无鉴权；所有写回都留 `.bak`。
+3. **默认本地自用**：默认只监听 `127.0.0.1`；显式启用非回环监听时强制密码登录（口令按 `--password` → `AIPLAN_WEBUI_PASSWORD` → `config/webui配置.json` → 随机生成的顺序解析，源码内不存默认口令），局域网防火墙规则只应限定本地子网，所有写回仍留 `.bak`。
 
 ## 二、目录职责
 
@@ -18,7 +18,7 @@
 ├── aiplan.py pan.py stock3d.py   根锚点：CLI（以自身目录定位 data/ 与 config/）
 ├── main.py                       统一入口：webui | aiplan | pan | stock3d | test | check
 ├── src/webui/                    控制台后端（包，python -m webui）
-├── src/webui/static/             前端（index.html + styles.css + js/ 模块树）
+├── src/webui/static/             前端（index.html + 桌面/手机样式 + js/ 模块树）
 ├── config/                       账户配置.json / 模型配置.json（+ 脱敏模板）
 ├── data/user/                    持仓数据.md / 自选股.md / 交易台账.md（个人数据）
 ├── data/                         运行产物：ai 报告、ai/pick 荐股、pan 快照、history、.trash
@@ -33,7 +33,7 @@
 
 ```
 webserver  ← __main__（python -m webui）
-   │  路由分派、静态文件、本地服务
+   │  路由分派、静态文件、/m 手机入口、密码登录、本地服务
    ├── jobs        子进程任务：启动 / 增量日志 / 中断 / 诊断 / 批量
    ├── market      页面数据组装：快照、代码候选、K 线、大盘走势预测
    │     └── store ──┐
@@ -61,6 +61,7 @@ webserver  ← __main__（python -m webui）
 | 新配置 / 新用户文件 | `paths.py` 加常量 + 同步 `.gitignore` 与 `store.py` |
 | 新后台任务 | `jobs.py`（命令行式）或 `pick_run.py`（内置 callable 式） |
 | 同花顺客户端适配 | `holdings_ths.py`；第三方依赖只在 `.venv-holdings` 中导入 |
+| 人工验证码流转 | 抓取子进程写本地图片/会话文件，WebUI `GET/POST /api/holdings/captcha` 读取与回填 |
 | 新的荐股评分维度 | `pick.py`（纯函数，必须可单测） |
 
 ## 四、前端模块图
@@ -70,13 +71,15 @@ main.js                入口：initNav + 各视图 init + 首屏刷新
   ├── core/util.js     DOM 选择、转义、格式化、toast、chip/badge
   ├── core/api.js      唯一 fetch 封装
   ├── core/app.js      State / VIEW_TITLE / showView / refreshState / openReport + 视图注册表
+  ├── core/mobile.js   /m 路径识别、底部导航、更多面板、移动端写入确认
   ├── ui/markdown.js   轻量 Markdown 渲染
   ├── ui/jsontree.js   原始 JSON 树
   ├── ui/modal.js      模态框与确认框
   ├── ui/cards.js      报告 / 大盘共用的卡片原语
   ├── ui/kline.js      K 线绘制与缩放
   └── views/*.js       九个页面，各自渲染 + 注册（console 总控台）
-core/poller.js 自动刷新定时器（档位 / 交易时段 / 退避 / localStorage）；ui/stockcard.js 股票卡片与分时小图
+core/poller.js 自动刷新定时器（档位 / 交易时段 / 退避 / localStorage）；ui/stockcard.js 股票卡片与分时小图；
+mobile.css 仅作用于 body[data-shell="mobile"]，桌面版和 /m 共用同一份视图 DOM。
 ```
 
 **跨页动作一律走注册表**，视图之间禁止互相 import：
@@ -137,7 +140,6 @@ POST /api/holdings /account /models /alerts/clear /trash/restore /trash/purge /p
 | 静态自检（结构 / 语法 / 模块图 / 密钥 / CLI 基线） | `python main.py check` |
 | 单元 + 接口回归（标准库 unittest） | `python main.py test` |
 | 重构前后接口对拍 | `python scripts/api_snapshot.py --out tmp/a.json` / `--compare tmp/a.json tmp/b.json` |
-| 浏览器冒烟（八页渲染 + 重交互 + 0 报错） | `node tests/ui/ui_smoke.mjs` |
+| 桌面浏览器冒烟（九页渲染 + 重交互 + 0 报错） | `node tests/ui/ui_smoke.mjs` |
+| 手机浏览器冒烟（三视口 + 九页 + 无横向溢出 + 0 报错） | `node tests/ui/mobile_smoke.mjs` |
 | 打包源码 | `python scripts/build.py` |
-
-

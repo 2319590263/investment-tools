@@ -214,6 +214,11 @@ code.cmd {
   color: #cbd7e4;
 }
 .console.tall { max-height: 620px; }
+.sync-log-card > summary { cursor: pointer; list-style: none; }
+.sync-log-card > summary::-webkit-details-marker { display: none; }
+.sync-log-card > summary::before { content: "▸"; color: var(--muted); margin-right: 6px; }
+.sync-log-card[open] > summary::before { content: "▾"; }
+.sync-log-card .console { max-height: 300px; }
 .console .l-stage { color: #7fb2ff; }
 .console .l-ok { color: var(--ok); }
 .console .l-warn { color: var(--warn); }
@@ -368,6 +373,11 @@ table.tbl a:hover { text-decoration: underline; }
 .alert-row:hover { border-color: var(--accent); }
 .alert-row.unread { border-color: rgba(76,141,255,.45); background: rgba(76,141,255,.06); }
 .alert-row.unread::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.desktop-mobile-link {
+  color: var(--text-2); text-decoration: none; font-size: 12px; white-space: nowrap;
+  border: 1px solid var(--line); border-radius: 8px; padding: 4px 9px;
+}
+.desktop-mobile-link:hover { border-color: var(--accent); color: var(--text); }
 /* 顶栏铃铛：任何页面都能看到未读到价提醒 */
 .bell {
   position: relative; margin-left: 6px; padding: 4px 8px; font-size: 15px; line-height: 1;
