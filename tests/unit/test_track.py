@@ -55,6 +55,10 @@ class Fixture(unittest.TestCase):
             p = mock.patch.object(obj, name, value)
             p.start()
             self.addCleanup(p.stop)
+        # 不读真实的 data/ai 报告：这些用例只关心跟踪产物本身（要真实报告的分支自己打桩）
+        fallback = mock.patch.object(self.track, "_newest_report_for", lambda code: (None, None))
+        fallback.start()
+        self.addCleanup(fallback.stop)
 
     def write_plan(self, day="20260914", stamp="153000", payload=None, code="600967",
                    apply_date="2026-09-15"):
@@ -269,7 +273,8 @@ class TestFactpack(Fixture):
         fact = self.track.factpack_sections(data, cap)
         self.assertEqual(fact["裁剪"], ["板块"])
         self.assertIn("用户录入的执行情况（权威口径）", [s["标题"] for s in fact["章节"]])
-        tiny = self.track.factpack_sections(data, 900)
+        keep_only = len(self.track.factpack_sections(data, 1)["文本"])
+        tiny = self.track.factpack_sections(data, keep_only - 1)
         self.assertEqual(tiny["裁剪"], ["板块", "大盘", "个股量价与形态"])
         self.assertIn("上一份计划（原文）", [s["标题"] for s in tiny["章节"]])
 

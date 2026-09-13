@@ -41,9 +41,7 @@ export function renderWatch(items) {
   $$("#watch-table [data-run]").forEach(a => a.addEventListener("click", e => {
     e.preventDefault();
     const it = items[Number(a.dataset.run)];
-    $("#code").value = it["代码"];
-    viewApi("run").syncCmd();
-    viewApi("run").checkReadiness();
+    viewApi("run").pickCode(it["代码"]);
     showView("run");
     toast("已把 " + it["代码"] + " 填入运行页", "ok");
   }));

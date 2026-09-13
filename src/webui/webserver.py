@@ -33,7 +33,7 @@ from .pick_run import pick_boards_bundle, pick_l1_subs, run_pick
 from .plancheck import plancheck_bundle, run_plan_check
 from .store import (load_account_bundle, load_holdings_bundle, load_models_bundle,
                     load_tracklist, load_watchlist, tracklist_add, tracklist_import_watchlist,
-                    tracklist_remove, watchlist_add, watchlist_remove)
+                    tracklist_remove, set_default_profile, watchlist_add, watchlist_remove)
 from .track import delete_plan as delete_track_plan
 from .track import exec_summary as track_exec_summary
 from .track import save_exec as save_track_exec
@@ -431,6 +431,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._save_json_config(body, ACCOUNT_PATH, load_account_bundle)
         if path == "/api/models":
             return self._save_json_config(body, MODELS_PATH, load_models_bundle)
+        if path == "/api/models/default":
+            if "默认_profile" not in body and "profiles_by_phase" not in body:
+                return self._err("缺少 默认_profile 或 profiles_by_phase")
+            bundle, err = set_default_profile(body.get("默认_profile"), body.get("profiles_by_phase"))
+            if err:
+                return self._err(err)
+            return self._json({"ok": True, "已写入": bundle.get("已写入"),
+                               "备份": bundle.get("备份"), "改动": bundle.get("改动") or [],
+                               "配置": bundle})
         if path == "/api/trash/restore":
             result, err = restore_trash(body.get("path"))
             if err:

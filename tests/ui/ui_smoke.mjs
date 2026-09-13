@@ -247,8 +247,13 @@ const cardTitles = await page.evaluate(() => Array.from(
 const top3 = cardTitles.slice(0, 3).join(" / ");
 const orderOk = /K 线/.test(cardTitles[0] || "") && /交易计划/.test(cardTitles[1] || "") &&
   /关键价位/.test(cardTitles[2] || "");
-console.log(`${orderOk ? "PASS" : "FAIL"}  报告页前 3 张卡顺序（${top3}）`);
-if (!orderOk) failed++;
+const hasPlan = cardTitles.some(t => /交易计划/.test(t));
+if (hasPlan) {
+  console.log(`${orderOk ? "PASS" : "FAIL"}  报告页前 3 张卡顺序（${top3}）`);
+  if (!orderOk) failed++;
+} else {
+  console.log(`INFO  最新报告没有模型计划（可能上次模型调用失败），跳过卡片顺序断言（${top3}）`);
+}
 /* 实盘复核卡片：时段 + 实盘价（或明确的取不到提示）必须渲染出来 */
 try {
   await page.waitForSelector("#plan-card #plan-body .gauge-row", { timeout: 30000 });
@@ -379,6 +384,58 @@ for (const sel of ["#console-flow", "#console-flow-sum", "#btn-flow-goto"]) {
   console.log(`${found > 0 ? "PASS" : "FAIL"}  总控台交易流控件 ${sel}`);
   if (!found) failed++;
 }
+
+/* ---- 模型配置：默认 profile 可切换（只看不点，避免改用户配置） ---- */
+await gotoView("models");
+await page.waitForFunction(() => {
+  const el = document.querySelector("#default-profile");
+  return el && el.options.length > 0;
+}, null, { timeout: 20000 }).catch(() => {});
+for (const sel of ["#default-profile", "#btn-default-save", "#default-phase-prep",
+                   "#default-phase-post", "#default-phase-all"]) {
+  const found = await page.locator(sel).count();
+  console.log(`${found > 0 ? "PASS" : "FAIL"}  模型配置控件 ${sel}`);
+  if (!found) failed++;
+}
+const profileOptions = await page.locator("#default-profile option").count();
+console.log(`${profileOptions >= 2 ? "PASS" : "FAIL"}  默认 profile 可选档位数（${profileOptions}）`);
+if (profileOptions < 2) failed++;
+const phaseOptions = await page.locator("#default-phase-post option").count();
+console.log(`${phaseOptions === profileOptions + 1 ? "PASS" : "FAIL"}  按时间段含「跟随默认」（${phaseOptions}）`);
+if (phaseOptions !== profileOptions + 1) failed++;
+
+/* ---- 运行研判：标的代码多选（输入 / 加入 / 移除） ---- */
+await gotoView("run");
+await page.waitForSelector("#code-picked", { state: "attached", timeout: 20000 });
+for (const sel of ["#btn-code-add", "#code-picked", "#btn-code-clear"]) {
+  const found = await page.locator(sel).count();
+  console.log(`${found > 0 ? "PASS" : "FAIL"}  运行页多选控件 ${sel}`);
+  if (!found) failed++;
+}
+await page.fill("#code", "512890");
+await page.press("#code", "Enter");
+await page.fill("#code", "002463");
+await page.click("#btn-code-add");
+await page.waitForTimeout(300);
+const chips = await page.$$eval("#code-picked .chip", els =>
+  els.map(e => e.textContent.replace("×", "").trim()));
+const pickedOk = chips.length === 2 && chips.indexOf("512890") >= 0 && chips.indexOf("002463") >= 0;
+console.log(`${pickedOk ? "PASS" : "FAIL"}  运行页多选标的（${chips.join("/")}）`);
+if (!pickedOk) failed++;
+const hintText = await page.textContent("#code-hint");
+const hintOk = /已选 2 只/.test(hintText);
+console.log(`${hintOk ? "PASS" : "FAIL"}  多选提示文案（${hintText.slice(0, 30)}…）`);
+if (!hintOk) failed++;
+await page.click("#code-picked .chip-x");
+await page.waitForTimeout(200);
+const left = await page.locator("#code-picked .chip").count();
+console.log(`${left === 1 ? "PASS" : "FAIL"}  点 × 能移除单只（剩 ${left}）`);
+if (left !== 1) failed++;
+await page.click("#btn-code-clear");
+await page.waitForTimeout(200);
+const cleared = await page.locator("#code-picked .chip").count();
+console.log(`${cleared === 0 ? "PASS" : "FAIL"}  清空已选标的`);
+if (cleared !== 0) failed++;
 
 await browser.close();
 

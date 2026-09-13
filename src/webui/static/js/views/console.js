@@ -202,10 +202,7 @@ function renderPollerState() {
 const cardHandlers = {
   onOpen: code => openCodeReport(code),
   onRun: code => {
-    const input = $("#code");
-    if (input) input.value = code;
-    viewApi("run").syncCmd();
-    viewApi("run").checkReadiness();
+    viewApi("run").pickCode(code);
     showView("run");
     toast("已把 " + code + " 填入运行页", "ok");
   },

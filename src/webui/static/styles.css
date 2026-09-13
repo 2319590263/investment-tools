@@ -621,3 +621,11 @@ input.inline-input:focus { outline: none; border-color: var(--accent); }
 .fl-events { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; max-height: 260px; overflow: auto; }
 #flow-detail { max-height: 720px; overflow: auto; }
 #flow-list .empty { padding: 14px 4px; }
+
+/* ---- 运行页：多选标的 ---- */
+.code-picked { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.code-picked .chip { display: inline-flex; align-items: center; gap: 6px; }
+.chip-x { border: 0; background: transparent; color: inherit; cursor: pointer; font-size: 13px;
+  line-height: 1; padding: 0 2px; opacity: .7; }
+.chip-x:hover { opacity: 1; }
+.pick-item.on { border-color: var(--accent); background: var(--accent-soft); color: #fff; }

@@ -87,7 +87,9 @@ export async function refreshState() {
     const dl = $("#code-list");
     dl.innerHTML = (st["代码候选"] || []).map(c =>
       '<option value="' + esc(c["thscode"] || c["代码"]) + '">' + esc(c["名称"] || "") + "</option>").join("");
-    if (!$("#code").value && (st["代码候选"] || []).length) {
+    const runApi = viewApi("run");
+    const picked = (runApi.pickedCodes && runApi.pickedCodes()) || [];
+    if (!$("#code").value && !picked.length && (st["代码候选"] || []).length) {
       $("#code").value = (st["代码候选"][0]["thscode"] || st["代码候选"][0]["代码"]);
     }
     const run = viewApi("run");

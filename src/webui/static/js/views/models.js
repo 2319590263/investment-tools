@@ -4,6 +4,50 @@ import { State, refreshState, registerView } from "../core/app.js";
 import { confirmMobileWrite, isMobileShell } from "../core/mobile.js";
 import { $, chip, esc, toast } from "../core/util.js";
 
+export const PROFILE_PHASES = [["prep", "盘前"], ["live", "盘中"], ["post", "盘后"], ["all", "全时段"]];
+
+
+function optionsHtml(profiles, current, followLabel) {
+  const head = followLabel ? '<option value="">' + esc(followLabel) + "</option>" : "";
+  return head + (profiles || []).map(p =>
+    '<option value="' + esc(p["名称"]) + '"' + (p["名称"] === current ? " selected" : "") + ">" +
+    esc(p["名称"]) + "</option>").join("");
+}
+
+
+async function saveDefaults() {
+  const body = {"默认_profile": ($("#default-profile") || {}).value || ""};
+  const byPhase = {};
+  PROFILE_PHASES.forEach(([key]) => { byPhase[key] = (($("#default-phase-" + key) || {}).value) || ""; });
+  body["profiles_by_phase"] = byPhase;
+  const msg = $("#models-default-msg");
+  if (msg) msg.textContent = "";
+  try {
+    const res = await api("/api/models/default", {method: "POST", body: JSON.stringify(body)});
+    if (!res.ok) { if (msg) msg.textContent = res.error; toast(res.error, "bad"); return; }
+    const changes = res["改动"] || [];
+    toast(changes.length ? ("已切换：" + changes.join("，")) : "配置没变化",
+          changes.length ? "ok" : "warn");
+    if (msg) msg.textContent = changes.length
+      ? ("已写入 " + (res["备份"] ? "（备份 " + res["备份"] + "）" : "")) : "内容与文件一致，未写入";
+    await loadModels();
+    refreshState();
+  } catch (e) { toast(e.message, "bad"); }
+}
+
+
+export async function setDefaultProfile(name) {
+  try {
+    const res = await api("/api/models/default", {
+      method: "POST", body: JSON.stringify({"默认_profile": name}),
+    });
+    if (!res.ok) { toast(res.error, "bad"); return; }
+    toast("默认 profile 已切换为 " + name + (res["备份"] ? "（旧配置备份为 " + res["备份"] + "）" : ""), "ok");
+    await loadModels();
+    refreshState();
+  } catch (e) { toast(e.message, "bad"); }
+}
+
 export async function loadModels() {
   const m = await api("/api/models");
   State.models = m;
@@ -11,13 +55,36 @@ export async function loadModels() {
   $("#models-editor").value = m["原文"] || "";
   const byPhase = m["profiles_by_phase"] || {};
   const phaseNote = Object.keys(byPhase).filter(k => byPhase[k]).map(k => k + "→" + byPhase[k]).join("，");
-  $("#profile-grid").innerHTML = (m["profiles"] || []).map(p => {
+  const profiles = m["profiles"] || [];
+  if ($("#default-profile")) $("#default-profile").innerHTML =
+    optionsHtml(profiles, m["默认_profile"]);
+  PROFILE_PHASES.forEach(([key]) => {
+    const el = $("#default-phase-" + key);
+    if (el) el.innerHTML = optionsHtml(profiles, byPhase[key] || "", "跟随默认");
+  });
+  const grid = $("#profile-grid");
+  grid.innerHTML = profiles.map(p => {
     const isDef = p["名称"] === m["默认_profile"];
     return '<div class="profile' + (isDef ? " is-default" : "") + '">' +
       "<h4>" + esc(p["名称"]) + (isDef ? chip("默认", "accent") : "") + "</h4>" +
       roleLine("研判", p["研判"]) + roleLine("复核", p["复核"]) +
+      '<div class="fl-act">' + (isDef ? "" :
+        '<button class="btn sm" data-default="' + esc(p["名称"]) + '">设为默认</button>') + "</div>" +
       "</div>";
   }).join("") + (phaseNote ? '<div class="profile"><h4>profiles_by_phase</h4><div class="role">' + esc(phaseNote) + "</div></div>" : "");
+  if (grid.dataset.bound !== "1") {
+    grid.dataset.bound = "1";
+    grid.addEventListener("click", e => {
+      const btn = e.target.closest("[data-default]");
+      if (!btn) return;
+      setDefaultProfile(btn.dataset.default);
+    });
+  }
+  const saveBtn = $("#btn-default-save");
+  if (saveBtn && saveBtn.dataset.bound !== "1") {
+    saveBtn.dataset.bound = "1";
+    saveBtn.addEventListener("click", saveDefaults);
+  }
 
   const cpsel = $("#check-profile");
   const prev = cpsel.value;

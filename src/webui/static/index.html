@@ -225,13 +225,17 @@
                 </div>
               </div>
               <div class="field">
-                <label>标的代码 <span class="req">必填</span></label>
+                <label>标的代码 <span class="req">必填</span>
+                  <span class="muted">可以多选：选多只会按顺序依次研判，每只各出一份报告</span></label>
                 <div class="row">
-                  <input id="code" list="code-list" placeholder="如 002463 或 002463.SZ" autocomplete="off" />
+                  <input id="code" list="code-list" placeholder="输入代码后按回车加入，如 002463 或 002463.SZ" autocomplete="off" />
                   <datalist id="code-list"></datalist>
-                  <button class="btn ghost" id="btn-holdings-pick" title="列出持仓与数据里的标的">选择</button>
+                  <button class="btn ghost" id="btn-code-add" title="把输入框里的代码加入列表">加入</button>
+                  <button class="btn ghost" id="btn-holdings-pick" title="从持仓 / 自选 / 行情缓存里多选">多选</button>
+                  <button class="btn ghost" id="btn-code-clear" hidden>清空</button>
                 </div>
-                <div class="hint" id="code-hint">一次只深度研判一只标的。</div>
+                <div class="code-picked" id="code-picked"></div>
+                <div class="hint" id="code-hint">一次只深度研判一只标的；也可以多选。</div>
               </div>
               <details class="adv">
                 <summary>高级选项（交易日 / profile / 抓数条数 / 事实包预算）</summary>
@@ -515,6 +519,24 @@
             <span class="muted">自检用</span>
             <select id="check-profile" class="inline-select"></select>
             <button class="btn ghost" id="btn-model-check">连通性自检</button></div>
+          <div class="card-b">
+            <div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+              <div class="field" style="margin:0;flex:0 0 190px">
+                <label>默认 profile <span class="muted">研判 / 荐股 / 交易流 / 批量都用它</span></label>
+                <select id="default-profile" class="inline-select"></select></div>
+              <div class="field" style="margin:0;flex:0 0 120px">
+                <label>盘前</label><select id="default-phase-prep" class="inline-select"></select></div>
+              <div class="field" style="margin:0;flex:0 0 120px">
+                <label>盘中</label><select id="default-phase-live" class="inline-select"></select></div>
+              <div class="field" style="margin:0;flex:0 0 120px">
+                <label>盘后</label><select id="default-phase-post" class="inline-select"></select></div>
+              <div class="field" style="margin:0;flex:0 0 120px">
+                <label>全时段</label><select id="default-phase-all" class="inline-select"></select></div>
+              <button class="btn primary" id="btn-default-save">保存默认</button>
+              <span class="muted" id="models-default-msg"></span>
+            </div>
+            <div class="muted">「按时间段」留「跟随默认」就用上面的默认 profile；运行页「高级选项 → profile」是单次临时覆盖，不改这里。切换只改「默认_profile / profiles_by_phase」两个键，providers 与 profiles 原样保留，写入前留 .bak。</div>
+          </div>
           <div class="card-b"><div class="profile-grid" id="profile-grid"></div></div>
           <div class="card-b"><pre class="console" id="model-console" hidden></pre></div>
         </div>

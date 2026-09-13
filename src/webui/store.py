@@ -4,7 +4,7 @@
 import json
 import os
 
-from .paths import ACCOUNT_PATH, MODELS_PATH, POOL_PATH, TRACKLIST_PATH, WATCHLIST_PATH, aiplan, atomic_write, num, read_bytes, read_text, rel
+from .paths import ACCOUNT_PATH, MODELS_PATH, POOL_PATH, TRACKLIST_PATH, WATCHLIST_PATH, aiplan, atomic_write, num, read_bytes, read_text, rel, save_like
 from .sources import stock3d_snapshot
 
 
@@ -181,6 +181,7 @@ def tracklist_import_watchlist():
 
 
 def load_models_bundle():
+    """读模型配置（含默认 profile、按时间段 profile、providers 掩码）。"""
     text = read_text(MODELS_PATH)
     cfg, err = aiplan.load_models(MODELS_PATH)
     providers, profiles = [], []
@@ -234,6 +235,53 @@ def load_models_bundle():
         "汇率": (cfg or {}).get("汇率") or {},
         "provider可用": providers_ok,
     }
+
+
+PROFILE_PHASES = ("prep", "live", "post", "all")
+
+
+def set_default_profile(name=None, by_phase=None):
+    """切换默认 profile（可同时按 prep/live/post/all 分时段指定）。写回前留 .bak。
+
+    只动「默认_profile」与「profiles_by_phase」两个键，providers / profiles 原样保留。
+    返回 (模型配置 bundle, 错误)。
+    """
+    cfg, err = aiplan.load_models(MODELS_PATH)
+    if err or not isinstance(cfg, dict):
+        return None, err or "模型配置读不出内容"
+    profiles = cfg.get("profiles") or {}
+    merged = dict(cfg)
+    changed = []
+    target = str(name or "").strip()
+    if target:
+        if target not in profiles:
+            return None, "profile 不存在：%s（现有：%s）" % (target, "、".join(profiles) or "无")
+        if target != str(cfg.get("默认_profile") or "").strip():
+            merged["默认_profile"] = target
+            changed.append("默认_profile=%s" % target)
+    if isinstance(by_phase, dict) and by_phase:
+        phase_map = dict(merged.get("profiles_by_phase") or {})
+        for phase in PROFILE_PHASES:
+            if phase not in by_phase:
+                continue
+            value = str(by_phase.get(phase) or "").strip()
+            if value and value not in profiles:
+                return None, "%s 段指定的 profile 不存在：%s" % (phase, value)
+            if value != str(phase_map.get(phase) or "").strip():
+                phase_map[phase] = value
+                changed.append("profiles_by_phase.%s=%s" % (phase, value or "跟随默认"))
+        merged["profiles_by_phase"] = phase_map
+    if not changed:
+        bundle = load_models_bundle()
+        bundle["已写入"] = False
+        bundle["改动"] = []
+        return bundle, None
+    written, bkp = save_like(MODELS_PATH, json.dumps(merged, ensure_ascii=False, indent=1))
+    bundle = load_models_bundle()
+    bundle["已写入"] = written
+    bundle["备份"] = rel(bkp) if bkp else None
+    bundle["改动"] = changed
+    return bundle, None
 
 
 def load_holdings_bundle():

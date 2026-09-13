@@ -162,8 +162,10 @@ viewApi("report").refreshReports();
 GET  /api/state /holdings /account /models /reports /report /history /symbols
      /market /market/forecast /plancheck /overview /alerts /kline /watchlist /trash /pick /pick/list
      /pick/boards /pick/industry /tracklist /track/all /track /blob
+     /models/default
      /flows /flow
 POST /api/holdings /account /models /alerts/clear /trash/restore /trash/purge /pick/delete
+     /models/default
      /report/delete /watchlist/add /watchlist/remove /watchlist
      /tracklist /tracklist/add /tracklist/remove /tracklist/import-watchlist
      /track/exec /track/delete

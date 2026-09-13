@@ -587,9 +587,7 @@ export function renderPick(bundle) {
   }));
   $$("#pick-result [data-pick-run]").forEach(a => a.addEventListener("click", e => {
     e.preventDefault();
-    $("#code").value = a.dataset.pickRun;
-    viewApi("run").syncCmd();
-    viewApi("run").checkReadiness();
+    viewApi("run").pickCode(a.dataset.pickRun);
     showView("run");
     toast("已把 " + a.dataset.pickRun + " 填入运行页", "ok");
   }));
