@@ -42,17 +42,18 @@ PACKAGE_MODULES = ("__init__.py", "__main__.py", "paths.py", "sources.py", "stor
                    "pickrank.py", "background.py", "plancheck.py", "planlines.py", "quotes.py",
                    "overview.py",
                    "alerts.py", "trash.py", "track.py", "track_run.py", "trackview.py",
+                   "flow.py", "flow_run.py", "flowview.py",
                    "webserver.py", "run_aiplan.py",
                    "holdings_ths.py", "holdings_sync.py")
 JS_MODULES = ("main.js", "core/util.js", "core/api.js", "core/app.js", "core/poller.js",
               "core/mobile.js",
                   "ui/markdown.js", "ui/jsontree.js", "ui/modal.js", "ui/cards.js", "ui/kline.js",
                   "ui/stockcard.js", "ui/planprices.js", "ui/pickfilter.js", "ui/pickcards.js",
-                  "ui/trackcards.js",
+                  "ui/trackcards.js", "ui/flowcards.js",
               "views/run.js", "views/report.js", "views/history.js", "views/holdings.js",
               "views/watch.js", "views/pick.js", "views/models.js", "views/market.js",
-              "views/track.js")
-VIEWS = ("console", "track", "run", "report", "history", "holdings", "watch", "pick",
+              "views/flow.js")
+VIEWS = ("console", "flow", "run", "report", "history", "holdings", "watch", "pick",
          "models", "market")
 
 FAILS = []

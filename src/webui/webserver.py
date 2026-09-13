@@ -16,16 +16,18 @@ import secrets
 import socket
 import sys
 import threading
+import time
 import webbrowser
 
 from .archive import delete_pick, delete_plan_log, delete_report, latest_pick_bundle, latest_report, list_picks, list_reports, pick_bundle, plan_log_entries, report_bundle
 from . import alerts as alerts_store
+from . import flowapi
 from .holdings_sync import CAPTCHA_ROOT, captcha_image, holdings_python, install_hint, submit_captcha_answer
 from .jobs import JOBS, build_check_argv, build_run_argv, run_batch
 from .market import (build_market, build_state, build_symbols, latest_market_forecast,
                      load_kline, run_market_forecast)
 from .overview import build_overview
-from .paths import ACCOUNT_PATH, AIPLAN, DATA_DIR, MODELS_PATH, PICK_DIR, POOL_PATH, PYTHON, ROOT, STATIC_DIR, TRACKLIST_PATH, TRASH_DIR, TRASH_TTL_DAYS, WATCHLIST_PATH, inside, num, read_text, rel, save_like
+from .paths import ACCOUNT_PATH, AIPLAN, DATA_DIR, MODELS_PATH, PICK_DIR, POOL_PATH, PYTHON, ROOT, STATIC_DIR, TRACKLIST_PATH, TRASH_DIR, TRASH_TTL_DAYS, WATCHLIST_PATH, aiplan, inside, num, read_text, rel, save_like
 from .pick import PICK_BOARD_TYPES, PICK_L1_INDUSTRIES, PICK_MAX_CANDIDATES, PICK_MAX_CONCEPTS, PICK_MODULES, PICK_PER_BOARD, pick_param
 from .pick_run import pick_boards_bundle, pick_l1_subs, run_pick
 from .plancheck import plancheck_bundle, run_plan_check
@@ -346,6 +348,8 @@ class Handler(BaseHTTPRequestHandler):
             if err:
                 return self._err(err, 400)
             return self._json(data)
+        if flowapi.handle_get(self, path, q):
+            return
         if path.startswith("/api/jobs/"):
             rest = path[len("/api/jobs/"):]
             jid = rest.split("/")[0]
@@ -506,6 +510,8 @@ class Handler(BaseHTTPRequestHandler):
             if err:
                 return self._err(err)
             return self._json(dict(result, ok=True, trash=trash_items()))
+        if flowapi.handle_post(self, path, body):
+            return
         if path == "/api/history/delete":
             if "line" not in body:
                 return self._err("缺少 line")
@@ -608,6 +614,11 @@ class Handler(BaseHTTPRequestHandler):
                                  func=lambda log, ctl: run_track(log, ctl, opts))
                 return self._json({"ok": True, "id": job["id"], "命令": job["命令"],
                                    "参数": meta})
+            elif kind in ("flow_plan", "flow_check"):
+                job, err = self._flow_job(kind, body)
+                if err:
+                    return self._err(err)
+                return self._json({"ok": True, "id": job["id"], "命令": job["命令"]})
             else:
                 return self._err("未知任务类型：%s" % kind)
             job = JOBS.start(kind, argv, meta)
@@ -617,6 +628,9 @@ class Handler(BaseHTTPRequestHandler):
             ok = JOBS.cancel(m.group(1))
             return self._json({"ok": ok})
         return self._err("未知接口：%s" % path, 404)
+
+    def _flow_job(self, kind, body):
+        return flowapi.start_job(kind, body)
 
     def _save_json_config(self, body, path, loader):
         text = body.get("text")

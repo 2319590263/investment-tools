@@ -516,10 +516,13 @@ def _mech_lines(data):
     return out
 
 
-def factpack_sections(data, cap=MAX_CHARS_DEFAULT):
-    """拼事实包；超上限时先砍背景数据（板块 → 大盘 → 个股形态）。"""
+def factpack_sections(data, cap=MAX_CHARS_DEFAULT, front=None):
+    """拼事实包；超上限时先砍背景数据（板块 → 大盘 → 个股形态）。
+
+    front 是调用方补充的高优先章节（如交易流状态），插在最前面、永不裁剪。
+    """
     bg = data.get("背景") or {}
-    keep = [("标的与账户", "\n".join(_account_lines(data))),
+    keep = list(front or []) + [("标的与账户", "\n".join(_account_lines(data))),
             ("今日实盘", "\n".join(_quote_lines(data))),
             ("上一份计划（原文）", "\n".join(_prev_lines(data))),
             ("用户录入的执行情况（权威口径）", "\n".join(_exec_lines(data))),

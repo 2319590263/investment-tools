@@ -77,6 +77,9 @@ TRASH_DIR = os.path.join(AI_DIR, ".trash")
 PICK_DIR = os.path.join(AI_DIR, "pick")
 PLANCHECK_DIR = os.path.join(AI_DIR, "plancheck")     # 报告实盘复核的模型点评产物
 TRACK_DIR = os.path.join(AI_DIR, "track")             # 标的跟踪：每日计划产物 + 执行记录
+FLOW_DIR = os.path.join(AI_DIR, "flows")              # 交易流：一条流一个 JSON + settings.json
+FLOW_SETTINGS = os.path.join(FLOW_DIR, "settings.json")
+LEDGER_PATH = os.path.join(ROOT, "data", "user", "交易台账.md")
 
 
 PHASES = ("prep", "live", "post", "all")

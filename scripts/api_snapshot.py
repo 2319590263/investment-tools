@@ -30,6 +30,8 @@ ENDPOINTS = [
     "/api/tracklist",
     "/api/track/all",
     "/api/track?code=600967",
+    "/api/flows",
+    "/api/flow?id=__missing__",
 ]
 
 VOLATILE_KEY = re.compile(r"(mtime|时间|生成|缓存|上次清理|扫描|用时|耗时|日期|现在|剩余天数|即将过期)")

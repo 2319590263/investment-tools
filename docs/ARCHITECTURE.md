@@ -42,6 +42,10 @@ webserver  ← __main__（python -m webui）
    ├── track       标的跟踪纯逻辑：适用交易日 / 执行记录 / 事实包 / Markdown / 产物读写
    │     ├── track_run   跟踪执行层：取数 → 一次研判档调用（可选复核档）→ 落盘
    │     └── trackview   跟踪页数据组装：清单卡片 + 详情（最新计划 / 执行 / 历史）
+   ├── flow        交易流纯逻辑：开流校验 / 平均成本与盈亏 / 接近带与提醒去重 / 台账合并 / 流文件读写
+   │     ├── flow_run    交易流执行层：重算计划（复用 track 事实包与模型层）+ 手动体检（消息面 + 四档结论）
+   │     ├── flowview    交易流页面数据：卡片 / 详情 / 机械检查（报价 → 盈亏 → 提醒 → 消息队列）
+   │     └── flowapi     交易流的 HTTP 入口（webserver 只做分派，避免它继续膨胀）
    ├── quotes      行情取数：批量报价（东财，1 次请求）+ 当日分时（腾讯，60 秒缓存 + 串行限速）
    ├── overview    总控台数据：持仓 / 自选卡片、计划线、到价提醒（只读）
    │     └── pickrank  荐股榜：最新产物按股票去重合并 + 推荐度排序（纯函数）
@@ -70,6 +74,9 @@ webserver  ← __main__（python -m webui）
 | 新的荐股评分维度 | `pick.py`（纯函数，必须可单测） |
 | 标的跟踪的新规则（适用交易日 / 执行记录 / 事实包裁剪） | `track.py`（纯函数，必须可单测） |
 | 标的跟踪的取数与编排 | `track_run.py`；页面数据在 `trackview.py` |
+| 交易流的规则（盈亏 / 接近带 / 台账 / 达标止损） | `flow.py`（纯函数，必须可单测） |
+| 交易流的计划与体检 | `flow_run.py`（计划复用 track 的取数与模型层；体检读 stock3d 消息面） |
+| 交易流的新接口 | `flowapi.py` + `webserver.py` 的一行分派 |
 | 新的计划线口径 | `planlines.py`（报告页 / 总控台 / 跟踪页共用，改一处三处生效） |
 
 ## 四、前端模块图
@@ -87,7 +94,8 @@ main.js                入口：initNav + 各视图 init + 首屏刷新
    ├── ui/kline.js      K 线绘制与缩放
    ├── ui/pickfilter.js 荐股模块多选（记忆）+ 从榜单预填筛选区
    ├── ui/trackcards.js 跟踪清单 / 计划摘要 / 执行录入表 / 历史时间线（只拼 HTML）
-   └── views/*.js       十个页面，各自渲染 + 注册（console 总控台、track 标的跟踪）
+   ├── ui/flowcards.js  交易流卡片 / 开流表单 / 详情（成交 · 体检 · 事件 · 计划）
+   └── views/*.js       十个页面，各自渲染 + 注册（console 总控台、flow 交易流）
 core/poller.js 自动刷新定时器（档位 / 交易时段 / 退避 / localStorage）；ui/stockcard.js 股票卡片与分时小图；
 mobile.css 仅作用于 body[data-shell="mobile"]，桌面版和 /m 共用同一份视图 DOM。
 ```
@@ -131,10 +139,19 @@ viewApi("report").refreshReports();
 9. **标的跟踪（每日计划 → 执行 → 次日计划）**：`POST /api/jobs {kind:"track"}` →
    `track_run.run_track` 逐只标的：`quotes.fetch_quotes` 一次批量报价（1 次请求）+
    `background.latest_pan/stock3d_tech` 背景 → `track.factpack_sections` 拼事实包（超上限先砍板块 →
-   大盘 → 个股形态）→ 一次研判档调用（可选复核档）→ `track.save_plan` 落
-   `data/ai/track/<日期>/`。执行情况由人工录入到同名 `*_track_exec.json`；上一份计划的适用交易日
-   早于本次时没填执行记录就跳过该标的（日志 `[WARN]`）。跟踪产物与报告同结构，报告页 / 实盘复核
-   可直接打开，总控台计划线取「报告 ∪ 跟踪」里每只标的最新一份。
+  大盘 → 个股形态）→ 一次研判档调用（可选复核档）→ `track.save_plan` 落
+  `data/ai/track/<日期>/`。执行情况由人工录入到同名 `*_track_exec.json`；上一份计划的适用交易日
+  早于本次时没填执行记录就跳过该标的（日志 `[WARN]`）。跟踪产物与报告同结构，报告页 / 实盘复核
+  可直接打开，总控台计划线取「报告 ∪ 跟踪」里每只标的最新一份。
+10. **交易流（从建仓盯到清仓）**：`data/ai/flows/<代码>-<起始日>.json` 存一条流（参数 / 成交 /
+   持仓 / 盈亏 / 计划引用 / 体检 / 事件 / 提醒状态）。**盯盘是页面轮询**：`GET /api/flows?refresh=1`
+   用一次批量报价覆盖所有在跑的流，`flowview.check_pass` 机械判定盈亏、接近带与触及、达标/止损，
+   把新提醒写进 `data/ai/alerts.jsonl`（同类型同价位当天只一次）；`overview` 把流卡区并进总控台，
+   所以人在别的页面（开着自动刷新）也在盯。模型只在两处出手：`flow_run.run_plan`（开流首份 /
+   盘后过点一键 / 手动；事实包最前面是「交易流状态」，成交与盈亏是权威口径）与 `flow_run.run_check`
+   （手动体检：stock3d 消息面 + 量价 + 板块大盘 + 流状态 → 四档结论；数据太旧可先跑
+   `stock3d.py pull|news` 子进程）。成交来自 `data/user/交易台账.md`（同花顺同步写入，按委托去重）
+   与手工补录，二者合并去重；补录/删除成交只重算盈亏，**不改计划**。
 
 ## 六、HTTP 接口
 
@@ -145,10 +162,13 @@ viewApi("report").refreshReports();
 GET  /api/state /holdings /account /models /reports /report /history /symbols
      /market /market/forecast /plancheck /overview /alerts /kline /watchlist /trash /pick /pick/list
      /pick/boards /pick/industry /tracklist /track/all /track /blob
+     /flows /flow
 POST /api/holdings /account /models /alerts/clear /trash/restore /trash/purge /pick/delete
      /report/delete /watchlist/add /watchlist/remove /watchlist
      /tracklist /tracklist/add /tracklist/remove /tracklist/import-watchlist
      /track/exec /track/delete
+     /flows /flow/fill /flow/fill/delete /flow/sync /flow/close /flow/delete
+     /flow/settings /flow/plan /flow/check
      /jobs /jobs/<id>/cancel
 ```
 

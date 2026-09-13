@@ -18,7 +18,7 @@
     </div>
     <nav class="nav" id="nav">
       <button class="nav-item active" data-view="console"><i>⌂</i>总控台</button>
-      <button class="nav-item" data-view="track"><i>◎</i>标的跟踪<span class="nav-badge" id="nav-track-badge" hidden></span></button>
+      <button class="nav-item" data-view="flow"><i>⇄</i>交易流<span class="nav-badge" id="nav-flow-badge" hidden></span></button>
       <button class="nav-item" data-view="run"><i>▶</i>运行研判</button>
       <button class="nav-item" data-view="report"><i>▤</i>报告</button>
       <button class="nav-item" data-view="history"><i>◷</i>历史与复盘</button>
@@ -77,6 +77,17 @@
           <div class="card-b"><div class="stock-grid" id="console-watch"><div class="muted">加载中 …</div></div></div>
         </div>
 
+        <div class="card" id="console-flow-card">
+          <div class="card-h"><span>交易流</span><span class="muted" id="console-flow-sum"></span>
+            <div class="spacer"></div>
+            <span class="muted" id="console-flow-src"></span>
+            <button class="btn ghost" id="btn-flow-goto">去交易流页</button></div>
+          <div class="card-b">
+            <div id="console-flow"><div class="muted">加载中 …</div></div>
+            <div class="hint" id="console-flow-hint"></div>
+          </div>
+        </div>
+
         <div class="card" id="console-pick-card">
           <div class="card-h"><span>荐股榜单</span><span class="muted" id="console-pick-sum"></span>
             <div class="spacer"></div>
@@ -118,68 +129,82 @@
         </div>
       </section>
 
-      <!-- ================= 标的跟踪 ================= -->
-      <section class="view" id="view-track">
-        <div class="card" id="track-nudge" hidden>
+      <!-- ================= 交易流 ================= -->
+      <section class="view" id="view-flow">
+        <div class="card" id="flow-nudge" hidden>
           <div class="card-b row">
-            <span id="track-nudge-text"></span>
+            <span id="flow-nudge-text"></span>
             <div class="spacer"></div>
-            <span class="muted" id="track-nudge-ctl"></span>
-            <button class="btn primary" id="btn-track-nudge">一键生成</button>
+            <button class="btn primary" id="btn-flow-nudge">一键重算</button>
           </div>
         </div>
 
         <div class="card">
-          <div class="card-h"><span>跟踪清单</span><span class="muted" id="track-path"></span>
-            <span class="muted" id="track-day"></span>
+          <div class="card-h"><span>盯盘</span>
+            <span class="muted">交易时段按档位取值：只算盈亏与到价，不调模型</span>
             <div class="spacer"></div>
-            <span class="muted" id="track-refresh-note"></span>
-            <button class="btn ghost" id="btn-track-import">从自选股导入</button>
-            <button class="btn ghost" id="btn-track-quotes">刷新实盘价</button></div>
+            <span class="muted" id="flow-poll-state">盯盘已关闭</span>
+            <label class="sw"><input type="checkbox" id="btn-flow-poll"> 盯盘</label>
+            <select id="flow-interval" class="inline-select"></select>
+            <select id="flow-band" class="inline-select" title="接近带：离计划价位多近就提醒">
+              <option value="0.2">接近 0.2%</option>
+              <option value="0.3">接近 0.3%（默认）</option>
+              <option value="0.5">接近 0.5%</option>
+              <option value="1">接近 1%</option>
+            </select>
+            <input id="flow-regen-time" class="inline-input" style="width:78px" title="盘后重算提醒时间" />
+            <label class="sw"><input type="checkbox" id="flow-auto-catchup"> 打开页面自动补跑</label></div>
           <div class="card-b">
-            <div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
-              <div class="field" style="margin:0;flex:0 0 150px">
-                <label>证券代码</label><input id="track-code" placeholder="如 600967" /></div>
-              <div class="field" style="margin:0;flex:1 1 150px">
-                <label>名称 <span class="muted">可选</span></label><input id="track-name" /></div>
-              <div class="field" style="margin:0;flex:1 1 150px">
-                <label>备注 <span class="muted">可选</span></label><input id="track-note" /></div>
-              <button class="btn primary" id="btn-track-add">加入跟踪</button>
-              <button class="btn" id="btn-track-generate">生成选中标的的计划</button>
-            </div>
-            <div class="err" id="track-msg"></div>
+            <div class="muted" id="flow-settings-note"></div>
+            <div class="flow-grid" id="flow-list"><div class="muted">加载中 …</div></div>
+            <div id="flow-closed" class="fl-closed-box"></div>
           </div>
-          <div class="card-b table-wrap"><table class="tbl" id="track-table"></table></div>
+        </div>
+
+        <div class="card" id="flow-new-card">
+          <div class="card-h"><span>开新流</span>
+            <span class="muted">一只标的、一笔专用资金、一个目标收益率与最大亏损 → 从建仓盯到清仓</span></div>
+          <div class="card-b" id="flow-new"></div>
         </div>
 
         <div class="grid-run">
           <div class="card">
-            <div class="card-h"><span>生成每日计划</span>
-              <span class="muted">每只标的 1 次模型调用</span>
+            <div class="card-h"><span>计划与体检</span><span class="muted" id="flow-detail-head"></span>
               <div class="spacer"></div>
-              <select id="track-profile" class="inline-select"></select>
-              <button class="btn ghost" id="btn-track-advanced">高级选项</button>
-              <button class="btn danger ghost" id="btn-track-stop" hidden>中断</button></div>
+              <button class="btn ghost" id="btn-flow-plan">重算计划</button>
+              <button class="btn ghost" id="btn-flow-check">体检</button>
+              <button class="btn danger ghost" id="btn-flow-stop" hidden>中断</button></div>
             <div class="card-b">
-              <div class="adv" id="track-adv" hidden>
-                <label class="sw"><input type="checkbox" id="track-review" /> 复核档（多一次模型调用，与报告页同质量）</label>
-                <div class="field" style="max-width:220px"><label>事实包字符上限</label>
-                  <input id="track-maxchars" type="number" /></div>
-                <div class="muted">账户 / 上一份计划 / 执行记录永不裁剪；超上限先砍板块、再砍大盘、最后砍个股形态。</div>
-              </div>
               <div class="run-line">
-                <span class="chip" id="track-status">待运行</span>
-                <code class="cmd" id="track-cmd">POST /api/jobs {kind:"track"}</code>
-              </div>
-              <pre class="console" id="track-console"><span class="muted">等待开始 …</span></pre>
+                <span class="chip" id="flow-status">待运行</span>
+                <code class="cmd" id="flow-cmd">POST /api/jobs {kind:"flow_plan"}</code></div>
+              <pre class="console" id="flow-console"><span class="muted">模型只在你点「重算计划 / 体检」时调用（每次 1 次）…</span></pre>
+              <div id="flow-detail"><div class="muted">在流卡片上点「详情」看成交、体检与计划；点「体检」排查意外情况。</div></div>
             </div>
           </div>
           <div class="card">
-            <div class="card-h"><span>标的详情</span><span class="muted" id="track-detail-head"></span>
+            <div class="card-h"><span>跟踪清单（计划来源）</span><span class="muted" id="track-path"></span>
+              <span class="muted" id="track-day"></span>
+              <span class="muted" id="track-detail-head"></span>
               <div class="spacer"></div>
-              <button class="btn ghost" id="btn-track-gen-one" hidden>生成这只</button></div>
+              <button class="btn ghost" id="btn-track-import">从自选股导入</button>
+              <button class="btn ghost" id="btn-track-quotes">刷新实盘价</button></div>
+            <div class="card-b">
+              <div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+                <div class="field" style="margin:0;flex:0 0 130px">
+                  <label>证券代码</label><input id="track-code" placeholder="如 600967" /></div>
+                <div class="field" style="margin:0;flex:1 1 130px">
+                  <label>名称 <span class="muted">可选</span></label><input id="track-name" /></div>
+                <div class="field" style="margin:0;flex:1 1 130px">
+                  <label>备注 <span class="muted">可选</span></label><input id="track-note" /></div>
+                <button class="btn primary" id="btn-track-add">加入跟踪</button>
+                <button class="btn" id="btn-track-generate">生成选中标的的计划</button>
+              </div>
+              <div class="err" id="track-msg"></div>
+            </div>
+            <div class="card-b table-wrap"><table class="tbl" id="track-table"></table></div>
             <div class="card-b" id="track-detail">
-              <div class="muted">在清单里点「详情」看某只标的的计划与执行记录。</div>
+              <div class="muted">在清单里点「详情」看这只标的的计划与执行记录。</div>
             </div>
           </div>
         </div>

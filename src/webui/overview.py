@@ -13,6 +13,8 @@ import os
 import time
 
 from . import alerts as alerts_store
+from . import flow
+from . import flowview
 from . import pickrank
 from . import quotes
 from . import track
@@ -179,8 +181,10 @@ def build_overview(refresh=False):
     hints = []
     rank = pickrank.build_rank({aiplan.code6(r.get("代码")) for r in hold_rows},
                                {aiplan.code6(w.get("代码")) for w in watch})
+    active_flows = flow.list_flows(active_only=True)
+    flow_codes = [aiplan.code6((d.get("标的") or {}).get("代码") or "") for d in active_flows]
     codes = ([r.get("代码") for r in hold_rows] + [w.get("代码") for w in watch] +
-             [row.get("代码") for row in rank.get("行") or []])
+             [row.get("代码") for row in rank.get("行") or []] + flow_codes)
     quote_map = {}
     if refresh:
         quote_map, qhints = quotes.fetch_quotes(codes, refresh=True)
@@ -193,6 +197,10 @@ def build_overview(refresh=False):
     by_code = newest_report_map(reports)
     held = {r.get("代码") for r in hold_rows}
     session = session_of()
+    # 交易流：同一次批量报价，做机械判定（盈亏 / 接近带 / 达标止损）并写消息队列；不调模型。
+    flows_block = flowview.console_block(quote_map, refresh=refresh) if active_flows else {
+        "行": [], "计数": {"进行中": 0, "显示": 0}, "待重算": [], "设置": flow.settings(),
+        "时段": session, "合计资金": 0.0, "提示": [], "口径": ""}
     alerts = []
 
     def shared(row, kind):
@@ -253,7 +261,7 @@ def build_overview(refresh=False):
                  "提示": hints},
         "汇总": hold.get("汇总") or {},
         "持仓": hold_cards, "自选": watch_cards,
-        "荐股": rank,
+        "荐股": rank, "flows": flows_block,
         "提醒": alerts[:ALERT_MAX],
         "路径": {"持仓": hold.get("路径"), "自选": rel(WATCHLIST_PATH)},
     }

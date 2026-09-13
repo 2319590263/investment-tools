@@ -80,15 +80,19 @@ def _fail_block(role, model, provider, error):
             "latency_ms": None, "provider": provider}
 
 
-def call_plan(log, s, fact, ctl):
-    """研判档：返回 (计划 JSON 或 None, 研究段)。失败不抛——产物仍要落盘并标注原因。"""
+def call_plan(log, s, fact, ctl, system=None, prompt=None):
+    """研判档：返回 (计划 JSON 或 None, 研究段)。失败不抛——产物仍要落盘并标注原因。
+
+    system / prompt 默认用标的跟踪的那套；交易流会传入带「交易流状态」的变体。
+    """
     conf = s["研判"]
     provider = s["provider"]
     block = _fail_block("研判", s["model"], provider.get("名称"), None)
     log("    调用 %s（%s）…" % (s["model"], provider.get("协议")))
     try:
         res = aiplan.call_model(
-            provider, s["model"], track.TRACK_SYSTEM, track.TRACK_PROMPT + "\n\n" + fact,
+            provider, s["model"], system or track.TRACK_SYSTEM,
+            (prompt or track.TRACK_PROMPT) + "\n\n" + fact,
             temperature=conf.get("temperature") if conf.get("temperature") is not None else 0.3,
             max_tokens=conf.get("max_tokens") or 8000,
             json_mode=bool(provider.get("json_object")), key=s["key"], extra=conf.get("参数"))

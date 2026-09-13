@@ -11,7 +11,7 @@ import { checkModel, saveModels } from "./views/models.js";
 import { initPickView } from "./views/pick.js";
 import { initReportView, loadLatestReport, refreshReports } from "./views/report.js";
 import { initRunView } from "./views/run.js";
-import { initTrackView } from "./views/track.js";
+import { initFlowView } from "./views/flow.js";
 import { initWatchView } from "./views/watch.js";
 
 export function initNav() {
@@ -38,7 +38,7 @@ export async function init() {
   initMobileShell();
   initNav();
   initConsoleView();
-  initTrackView();
+  initFlowView();
   initRunView();
   initReportView();
   initHoldingsView();

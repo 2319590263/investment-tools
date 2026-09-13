@@ -238,6 +238,13 @@ def diagnose_job(job):
             return None
         return ("标的跟踪失败：检查模型 Key/余额与网络；若日志里写「未录入上一份计划的执行情况」，"
                 "先在跟踪页把上一份计划的执行记录填好再生成。")
+    if kind in ("flow_plan", "flow_check"):
+        if rc in (None, 0):
+            return None
+        if kind == "flow_check":
+            return ("体检失败：检查模型 Key/余额与网络；若日志里写「抓数超时/失败」，"
+                    "先单独跑一次 python stock3d.py news <代码> 看是不是消息面源不可用。")
+        return ("重算计划失败：检查模型 Key/余额与网络；流已结束或未开流会被直接拒绝。")
     if rc in (None, 0):
         return None
     code6_ = aiplan.code6(meta.get("code") or "")

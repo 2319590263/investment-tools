@@ -15,12 +15,12 @@ import { mkdirSync } from "node:fs";
 const PORT = process.argv[2] || process.env.AIPLAN_WEBUI_PORT || "8765";
 const BASE = `http://127.0.0.1:${PORT}`;
 
-const VIEWS = ["console", "track", "run", "report", "history", "holdings", "watch", "pick",
+const VIEWS = ["console", "flow", "run", "report", "history", "holdings", "watch", "pick",
                "models", "market"];
 // 每个视图必须渲染出的真实内容（空壳页面不算通过）
 const CONTENT = {
   console: "#console-body .kv",
-  track: "#track-table tbody tr",
+  flow: "#flow-list .flow-card, #flow-list .empty",
   run: "#console",
   report: "#report-struct .card",
   history: "#hist-table tbody tr",
@@ -339,41 +339,45 @@ console.log(`${multiModRows === 0 ? "PASS" : "FAIL"}  候选榜一票一模块�
 if (multiModRows !== 0) failed++;
 
 
-/* ---- 标的跟踪页：清单 + 生成控件 + 详情容器（全程不点「生成」，不打模型） ---- */
-await gotoView("track");
-for (const sel of ["#track-table", "#btn-track-generate", "#btn-track-add", "#btn-track-import",
-                   "#btn-track-quotes", "#track-console", "#track-detail", "#btn-track-advanced",
-                   "#nav-track-badge"]) {
+/* ---- 交易流页：盯盘控件 + 流卡区 + 开流表单 + 详情（不点「体检 / 重算」，不打模型） ---- */
+await gotoView("flow");
+await page.waitForSelector("#btn-flow-create", { timeout: 20000 }).catch(() => {});
+for (const sel of ["#flow-list", "#btn-flow-create", "#btn-flow-poll", "#flow-interval",
+                   "#flow-band", "#flow-console", "#flow-detail", "#btn-flow-plan",
+                   "#btn-flow-check", "#nav-flow-badge", "#track-table", "#btn-track-generate",
+                   "#btn-track-add", "#btn-track-import", "#btn-track-quotes"]) {
   const found = await page.locator(sel).count();
-  console.log(`${found > 0 ? "PASS" : "FAIL"}  跟踪页控件 ${sel}`);
+  console.log(`${found > 0 ? "PASS" : "FAIL"}  交易流页控件 ${sel}`);
   if (!found) failed++;
 }
 await page.waitForFunction(() => {
-  const t = document.querySelector("#track-table");
-  return t && t.querySelector("tbody tr");
+  const box = document.querySelector("#flow-list");
+  return box && (box.querySelector(".flow-card") || box.querySelector(".empty"));
 }, null, { timeout: 20000 }).catch(() => {});
-const trackRows = await page.locator("#track-table tbody tr").count();
-const trackText = await page.locator("#track-table").innerText().catch(() => "");
-const trackOk = trackRows > 0 || /跟踪清单还是空的/.test(trackText);
-console.log(`${trackOk ? "PASS" : "FAIL"}  跟踪清单渲染（${trackRows} 行）`);
-if (!trackOk) failed++;
-await page.click("#btn-track-advanced");
-const advOpen = await page.locator("#track-adv").isVisible();
-console.log(`${advOpen ? "PASS" : "FAIL"}  高级选项可展开`);
-if (!advOpen) failed++;
-const maxChars = await page.inputValue("#track-maxchars");
-console.log(`${String(maxChars).length > 0 ? "PASS" : "FAIL"}  事实包字符上限有默认值（${maxChars}）`);
-if (!String(maxChars).length) failed++;
-const firstDetail = page.locator("#track-table a[data-detail]").first();
-if (await firstDetail.count()) {
-  await firstDetail.click();
-  await page.waitForSelector("#track-detail .tk-detail-head", { timeout: 15000 }).catch(() => {});
-  const detailText = await page.locator("#track-detail").innerText().catch(() => "");
-  const hasBlocks = /关键价位/.test(detailText) || /还没有计划产物/.test(detailText);
-  console.log(`${hasBlocks ? "PASS" : "FAIL"}  详情卡渲染（计划/关键价位或空态）`);
+const flowCards = await page.locator("#flow-list .flow-card").count();
+const flowText = await page.locator("#flow-list").innerText().catch(() => "");
+const flowOk = flowCards > 0 || /还没有交易流/.test(flowText);
+console.log(`${flowOk ? "PASS" : "FAIL"}  交易流卡区渲染（${flowCards} 条流）`);
+if (!flowOk) failed++;
+const bandOptions = await page.locator("#flow-band option").count();
+console.log(`${bandOptions >= 3 ? "PASS" : "FAIL"}  接近带档位（${bandOptions} 档）`);
+if (bandOptions < 3) failed++;
+if (flowCards > 0) {
+  await page.locator("#flow-list .flow-card [data-act='detail']").first().click();
+  await page.waitForSelector("#flow-detail .fl-detail-head", { timeout: 15000 }).catch(() => {});
+  const detail = await page.locator("#flow-detail").innerText().catch(() => "");
+  const hasBlocks = /补录成交/.test(detail) && /体检记录/.test(detail) && /事件时间线/.test(detail);
+  console.log(`${hasBlocks ? "PASS" : "FAIL"}  流详情含成交录入 / 体检 / 事件时间线`);
   if (!hasBlocks) failed++;
 } else {
-  console.log("INFO  跟踪清单为空，跳过详情卡断言");
+  console.log("INFO  还没有交易流，跳过详情断言（开流表单已在上面断言）");
+}
+/* ---- 总控台交易流卡区 ---- */
+await gotoView("console");
+for (const sel of ["#console-flow", "#console-flow-sum", "#btn-flow-goto"]) {
+  const found = await page.locator(sel).count();
+  console.log(`${found > 0 ? "PASS" : "FAIL"}  总控台交易流控件 ${sel}`);
+  if (!found) failed++;
 }
 
 await browser.close();

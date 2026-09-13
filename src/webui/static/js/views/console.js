@@ -266,6 +266,7 @@ export function renderOverview(d) {
   const watchBox = $("#console-watch");
   if (holdBox) holdBox.innerHTML = cardsGrid(holdList, "hold");
   if (watchBox) watchBox.innerHTML = cardsGrid(watchList, "watch");
+  renderFlows(d["flows"] || {}, rf);
 
   $$("#view-console .stock-card").forEach(card => {
     const item = holdList.concat(watchList).find(x => x["代码"] === card.dataset.code);
@@ -420,6 +421,65 @@ function pickModuleButtons(facets) {
   }).join("");
 }
 
+/* 总控台的交易流卡区：同一次批量报价 + 同一套机械判定（不调模型）。 */
+export function renderFlows(block, rf) {
+  const box = $("#console-flow");
+  if (!box) return;
+  const rows = block["行"] || [];
+  const sum = $("#console-flow-sum");
+  if (sum) {
+    const n = (block["计数"] || {})["进行中"] || 0;
+    sum.textContent = n ? ("在跑 " + n + " 条 · 占用 " + fmtMoney(block["合计资金"], 0) + " 元")
+                        : "还没有在跑的交易流";
+  }
+  const src = $("#console-flow-src");
+  if (src) src.textContent = (rf && rf["模式"] === "实时" ? "实时口径 ｜ " : "") + (block["口径"] || "");
+  const hint = $("#console-flow-hint");
+  if (hint) {
+    const pending = block["待重算"] || [];
+    hint.textContent = pending.length ? ("今日盘后还没重算计划：" + pending.join("、") + "（去交易流页一键重算）") : "";
+  }
+  if (!rows.length) {
+    box.innerHTML = '<div class="muted">还没有交易流：去「交易流」页开一条（填本流资金、目标收益率、最大亏损），' +
+      "就会生成首份计划并从建仓一路盯到清仓。</div>";
+    return;
+  }
+  let html = '<div class="table-wrap" style="max-height:320px"><table class="tbl"><thead><tr>' +
+    "<th>标的</th><th>状态</th><th class='num'>现价</th><th class='num'>合计盈亏</th>" +
+    "<th class='num'>收益率</th><th>下一步</th><th>到价</th><th>操作</th></tr></thead><tbody>";
+  rows.forEach(c => {
+    const pnl = c["盈亏"] || {};
+    const marks = c["到价"] || [];
+    const stale = (c["待重算"] || {})["待重算"];
+    html += "<tr>" +
+      "<td><b>" + esc((c["标的"] || {})["名称"] || "") + "</b>" +
+        '<div class="mono muted">' + esc((c["标的"] || {})["代码"] || "") + "</div></td>" +
+      "<td>" + chip(c["状态"] || "—", c["状态"] === "进行中" ? "accent" : "flat") +
+        (stale ? chip("待重算", "warn") : "") + "</td>" +
+      '<td class="num">' + (pnl["现价"] == null ? "—" : fmt(pnl["现价"], 3)) + "</td>" +
+      '<td class="num ' + kindCls(pnl["合计_元"]) + '">' + fmtMoney(pnl["合计_元"], 0) + "</td>" +
+      '<td class="num ' + kindCls(pnl["收益率_pct"]) + '">' + fmt(pnl["收益率_pct"], 2) + "%</td>" +
+      '<td class="wrap muted">' + esc(c["下一步"] || "") + "</td>" +
+      "<td>" + marks.slice(0, 2).map(m =>
+        chip(m["类型"], m["级别"] === "bad" ? "bad" : (m["级别"] === "ok" ? "ok" : "warn"))).join("") + "</td>" +
+      "<td><button class='btn sm ghost' data-flow-open='" + esc(c["流编号"]) + "'>详情</button></td></tr>";
+  });
+  box.innerHTML = html + "</tbody></table></div>";
+  $$("#console-flow [data-flow-open]").forEach(b => b.addEventListener("click", () => {
+    const target = viewApi("flow");
+    if (target.openDetail) target.openDetail(b.dataset.flowOpen, false);
+    showView("flow");
+  }));
+}
+
+
+function kindCls(v) {
+  const n = num(v);
+  if (n === null) return "";
+  return n > 0 ? "up" : (n < 0 ? "down" : "");
+}
+
+
 function renderPickTable() {
   const box = $("#console-pick");
   const more = $("#console-pick-more");
@@ -556,6 +616,8 @@ export function initConsoleView() {
   }
   const quotes = $("#btn-console-quotes");
   if (quotes) quotes.addEventListener("click", async () => { if (await loadConsole(true)) toast("已刷新实盘价", "ok"); });
+  const flowGo = $("#btn-flow-goto");
+  if (flowGo) flowGo.addEventListener("click", () => showView("flow"));
   const reload = $("#btn-console-reload");
   if (reload) reload.addEventListener("click", async () => { if (await loadConsole(false)) toast("已刷新", "ok"); });
   const nudgeBtn = $("#btn-console-nudge");
