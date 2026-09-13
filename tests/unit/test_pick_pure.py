@@ -41,7 +41,7 @@ class TestPickParams(unittest.TestCase):
 
     def test_defaults_when_empty(self):
         p = self.mod.pick_param({})
-        self.assertEqual(p["modules"], ["短线"])          # 模块单选，默认第一个
+        self.assertEqual(p["modules"], ["短线"])          # 模块多选，空值回退第一个
         self.assertEqual(p["industry"], [])
         self.assertEqual(p["concepts"], [])
         self.assertEqual(p["per_board"], 5)
@@ -50,9 +50,18 @@ class TestPickParams(unittest.TestCase):
         self.assertEqual(p["exclude"], {"st": True, "new": True, "low_price": True,
                                         "low_amount": True, "skip_688_bj": False})
 
-    def test_module_is_single_choice(self):
-        self.assertEqual(self.mod.pick_param({"modules": ["长线", "中线", "不存在"]})["modules"], ["长线"])
-        self.assertEqual(self.mod.pick_param({"module": "波段", "modules": ["长线"]})["modules"], ["波段"])
+    def test_modules_multi_select(self):
+        # 去重 + 按固定顺序（短线→波段→中线→长线）
+        self.assertEqual(self.mod.pick_param({"modules": ["长线", "中线", "不存在", "长线"]})["modules"],
+                         ["中线", "长线"])
+        # module 与 modules 合并
+        self.assertEqual(self.mod.pick_param({"module": "波段", "modules": ["长线"]})["modules"],
+                         ["波段", "长线"])
+        # 四个一起选也在（上限就是 4 个模块）
+        self.assertEqual(self.mod.pick_param({"modules": ["长线", "短线", "中线", "波段"]})["modules"],
+                         ["短线", "波段", "中线", "长线"])
+        # 全非法时回退默认
+        self.assertEqual(self.mod.pick_param({"modules": ["不存在"]})["modules"], ["短线"])
 
     def test_clamps_out_of_range(self):
         p = self.mod.pick_param({"per_board": 0, "max_candidates": 99999, "max_chars": 10})

@@ -118,6 +118,44 @@ if (planText) {
   console.log("INFO  持仓卡片没有计划行，跳过计划行断言");
 }
 
+/* ---- 总控台荐股榜：筛选控件 + 排行榜（没有产物时给空态） ---- */
+for (const sel of ["#console-pick", "#console-pick-mods", "#console-pick-l1",
+                   "#console-pick-theme", "#btn-pick-goto", "#btn-pick-reset"]) {
+  const found = await page.locator(sel).count();
+  console.log(`${found > 0 ? "PASS" : "FAIL"}  荐股榜控件 ${sel}`);
+  if (!found) failed++;
+}
+await page.waitForFunction(() => {
+  const box = document.querySelector("#console-pick");
+  return box && (box.querySelector("table.tbl tbody tr") || /还没有荐股结果/.test(box.textContent));
+}, null, { timeout: 20000 }).catch(() => {});
+const rkRows = await page.locator("#console-pick table.tbl tbody tr:not(.rk-plan)").count();
+const rkText = await page.locator("#console-pick").innerText();
+const rkOk = rkRows > 0 || /还没有荐股结果/.test(rkText);
+console.log(`${rkOk ? "PASS" : "FAIL"}  荐股榜渲染（${rkRows} 行）`);
+if (!rkOk) failed++;
+if (rkRows > 0) {
+  const planLine = await page.locator("#console-pick tr.rk-plan").first()
+    .innerText({ timeout: 5000 }).catch(() => "");
+  const hasPlan = /买点/.test(planLine) && /止损/.test(planLine) && /止盈点/.test(planLine) && !/~/.test(planLine);
+  console.log(`${hasPlan ? "PASS" : "FAIL"}  首推行带买点/止损/止盈点且无区间（${planLine.slice(0, 40)}…）`);
+  if (!hasPlan) failed++;
+  const optionText = await page.locator("#console-pick-l1 option").nth(1).getAttribute("value");
+  if (optionText) {
+    await page.selectOption("#console-pick-l1", optionText);
+    await page.waitForTimeout(200);
+    const filtered = await page.locator("#console-pick-more").innerText();
+    const okFilter = /筛选后 \d+ 只 \/ 共 \d+ 只/.test(filtered || "");
+    console.log(`${okFilter ? "PASS" : "FAIL"}  行业筛选生效（${filtered}）`);
+    if (!okFilter) failed++;
+    await page.click("#btn-pick-reset");
+    await page.waitForTimeout(150);
+  } else {
+    console.log("INFO  榜单没有可筛的行业，跳过筛选联动断言");
+  }
+  await page.screenshot({ path: "build/ui-smoke-console-pick.png" });
+}
+
 await gotoView("report");
 await page.waitForSelector("#report-struct .card", { timeout: 30000 });
 /* 卡片顺序：K线 / 交易计划 / 关键价位 置顶（用户要求的排列） */
@@ -165,6 +203,27 @@ if (!kline.card) {
 } else {
   console.log("INFO  K 线卡片存在，但没有可用的日K缓存（页面会显示提示文案，属正常）");
 }
+
+/* ---- 荐股页模块多选：可同时点亮、至少留一个、记忆到 localStorage ---- */
+await page.evaluate(() => localStorage.removeItem("aiplan.pick.modules"));
+await page.reload({ waitUntil: "domcontentloaded" });
+await page.waitForSelector("#view-console.active", { timeout: 20000 });
+await gotoView("pick");
+const modsOn = () => page.$$eval("#pick-modules button.on", els => els.map(e => e.dataset.module));
+const defMods = await modsOn();
+console.log(`${defMods.length === 1 && defMods[0] === "短线" ? "PASS" : "FAIL"}  模块默认勾选（${defMods.join("/")}）`);
+if (!(defMods.length === 1 && defMods[0] === "短线")) failed++;
+await page.click('#pick-modules button[data-module="波段"]');
+const twoMods = await modsOn();
+const stored = await page.evaluate(() => localStorage.getItem("aiplan.pick.modules") || "");
+const multiOk = twoMods.length === 2 && twoMods.includes("短线") && twoMods.includes("波段") && /波段/.test(stored);
+console.log(`${multiOk ? "PASS" : "FAIL"}  模块可多选且写入 localStorage（${twoMods.join("/")}）`);
+if (!multiOk) failed++;
+await page.click('#pick-modules button[data-module="短线"]');
+await page.click('#pick-modules button[data-module="波段"]');   // 取消最后一个应被拦下
+const leftMods = await modsOn();
+console.log(`${leftMods.length === 1 ? "PASS" : "FAIL"}  至少保留一个模块（${leftMods.join("/")}）`);
+if (leftMods.length !== 1) failed++;
 
 /* ---- 荐股页深度检查：勾选一个行业会更新预估文案 ---- */
 await gotoView("pick");

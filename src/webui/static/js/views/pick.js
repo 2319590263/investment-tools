@@ -4,19 +4,23 @@ import { State, registerView, showView, viewApi } from "../core/app.js";
 import { $, $$, badge, chip, dirColor, esc, fmt, fmtPct, has, num, pctClass, toast } from "../core/util.js";
 import { drawKline } from "../ui/kline.js";
 import { closeModal, confirmModal, openModal } from "../ui/modal.js";
+import { PICK_MODULE_CYCLE, pickApplyModules, pickLoadModules, pickModules,
+         pickSaveModules, pickPrefill } from "../ui/pickfilter.js";
 
 export function pickLoadBoards(force) {
   Pick.boardsMsg = "板块数据加载中…";
   pickRenderLists();
-  api("/api/pick/boards" + (force ? "?refresh=1" : ""))
+  return api("/api/pick/boards" + (force ? "?refresh=1" : ""))
     .then(res => {
       Pick.boards = res;
       Pick.boardsMsg = (res["错误"] && res["错误"].length) ? ("部分板块数据降级：" + res["错误"].join("；")) : "";
       pickRenderLists();
+      return res;
     })
     .catch(e => {
       Pick.boardsMsg = "板块数据加载失败：" + e.message;
       pickRenderLists();
+      return null;
     });
 }/* =========================================================================
    荐股（先筛选板块 → 本地机械打分 + 一次模型点评）
@@ -28,9 +32,7 @@ export const Pick = {
   subs: {}, industry: {}, concepts: {}, filter: "", themeOpen: {},
 };
 
-export const PICK_MODULE_CYCLE = {
-  "短线": "1-5 个交易日", "波段": "2-6 周", "中线": "1-3 个月", "长线": "6 个月以上",
-};
+export { PICK_MODULE_CYCLE };
 
 export const PICK_CONCEPT_CAP = 120;
 
@@ -77,8 +79,10 @@ export function pickSyncHint() {
       const text = c.unknown
         ? "≥ " + known + " 个板块（含 " + c.unknown + " 个行业未展开细分，按实际细分展开）"
         : known + " 个板块";
+      const mods = pickModules();
       hint.innerHTML = "<b>将抓取 " + text + "</b>（每板块前 " + per + " 只，候选上限 " + cap +
-        "）→ <b>1 次模型调用</b>（profile 的研判档）<br>粗略预计 " +
+        "）→ <b>1 次模型调用</b>（profile 的研判档）<br>模块：" +
+        esc(mods.join(" / ") || "—") + "（" + mods.length + " 个，各自一套权重、各出一张候选表）<br>粗略预计 " +
         (sec < 90 ? "约 " + sec + " 秒" : "约 " + Math.round(sec / 60) + " 分钟") +
         "；机械榜一定落盘，模型失败会如实标注。";
     }
@@ -775,9 +779,12 @@ export async function showPickHistory() {
 }
 
 export function initPickView() {
+  pickLoadModules();
   $$("#pick-modules button").forEach(b => b.addEventListener("click", () => {
-    $$("#pick-modules button").forEach(x => x.classList.remove("on"));
-    b.classList.add("on");
+    const on = !b.classList.contains("on");
+    if (!on && pickModules().length <= 1) { toast("至少保留一个模块", "warn"); return; }
+    b.classList.toggle("on", on);
+    pickSaveModules();
     pickSyncHint();
   }));
   $$("#pick-tabs button").forEach(b => b.addEventListener("click", () => {
@@ -866,4 +873,8 @@ export async function drawPickKline() {
 }
 
 /* 注册给 core/app.js：切到本页时按需加载 / 对外暴露的动作。 */
-registerView("pick", { onShow: loadPick });
+registerView("pick", {
+  onShow: loadPick,
+  prefill: payload => pickPrefill(payload, { state: Pick, loadBoards: pickLoadBoards,
+                                             renderLists: pickRenderLists, syncHint: pickSyncHint }),
+});

@@ -572,3 +572,11 @@ table.tbl a:hover { text-decoration: underline; }
 #pick-result .tbl td .hint { margin-top: 2px; }
 #pick-result .card-h .btn { margin-left: 8px; }
 #pick-result .note div { margin-bottom: 4px; }
+
+/* ---- 总控台荐股榜 ---- */
+#console-pick-card .table-wrap { max-height: 460px; }
+table.tbl tr.rk-plan td { border-top: 0; padding-top: 0; color: var(--text-2); font-size: 12px; }
+table.tbl td.rk-ops { white-space: nowrap; }
+table.tbl td.rk-ops .btn { margin-left: 4px; }
+.rk-code { color: inherit; text-decoration: none; }
+#console-pick-more { margin-top: 6px; }

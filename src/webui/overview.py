@@ -13,6 +13,7 @@ import os
 import time
 
 from . import alerts as alerts_store
+from . import pickrank
 from . import quotes
 from .archive import list_reports
 from .paths import ROOT, WATCHLIST_PATH, aiplan, num, rel
@@ -237,11 +238,15 @@ def build_overview(refresh=False):
     watch = load_watchlist() or []
     hold_rows = hold.get("持仓") or []
     hints = []
-    codes = [r.get("代码") for r in hold_rows] + [w.get("代码") for w in watch]
+    rank = pickrank.build_rank({aiplan.code6(r.get("代码")) for r in hold_rows},
+                               {aiplan.code6(w.get("代码")) for w in watch})
+    codes = ([r.get("代码") for r in hold_rows] + [w.get("代码") for w in watch] +
+             [row.get("代码") for row in rank.get("行") or []])
     quote_map = {}
     if refresh:
         quote_map, qhints = quotes.fetch_quotes(codes, refresh=True)
         hints += qhints
+    pickrank.apply_quotes(rank.get("行") or [], quote_map, refresh)
     reports = list_reports()
     by_code = newest_report_map(reports)
     held = {r.get("代码") for r in hold_rows}
@@ -306,6 +311,7 @@ def build_overview(refresh=False):
                  "提示": hints},
         "汇总": hold.get("汇总") or {},
         "持仓": hold_cards, "自选": watch_cards,
+        "荐股": rank,
         "提醒": alerts[:ALERT_MAX],
         "路径": {"持仓": hold.get("路径"), "自选": rel(WATCHLIST_PATH)},
     }

@@ -6,7 +6,7 @@
  */
 import { api } from "../core/api.js";
 import { State, openReport, registerView, showView, viewApi } from "../core/app.js";
-import { $, $$, esc, fmt, fmtMoney, num, toast } from "../core/util.js";
+import { $, $$, badge, chip, esc, fmt, fmtMoney, fmtPct, num, pctClass, toast } from "../core/util.js";
 import { DEFAULT_MS, INTERVALS, createPoller, isTradingSession, loadPref, savePref } from "../core/poller.js";
 import { bindStockCards, drawSpark, planLines, stockCard } from "../ui/stockcard.js";
 import { showKlineModal } from "../ui/kline.js";
@@ -282,6 +282,265 @@ export function renderOverview(d) {
   renderPollerState();
 }
 
+/* =========================================================================
+   荐股榜单（读 /api/overview 的「荐股」段：最新一份产物 + 实时价）
+
+   只读：不写盘、不额外发请求；价格随总控台自动刷新/手动刷新一起更新。
+   排名在前端筛选后重算（服务端已按推荐度降序，筛选不改变相对顺序）。
+   ========================================================================= */
+
+const PICK_TOP = 30;                 // 默认只列前 N 行，其余点「显示全部」
+const RANK_PLACE = ["①", "②", "③"];
+const pickUI = { data: null, mods: new Set(), l1: "", sub: "", theme: "", concept: "", showAll: false };
+
+function pickModulesOf(rows) {
+  const out = [];
+  (rows || []).forEach(r => { if (r["模块"] && out.indexOf(r["模块"]) < 0) out.push(r["模块"]); });
+  return out;
+}
+
+function pickTree() {
+  return ((pickUI.data || {})["筛选树"]) || { 行业: [], 概念: [], 未归类: [] };
+}
+
+function pickFillSelect(sel, items, value, allLabel) {
+  if (!sel) return "";
+  items = items || [];
+  sel.innerHTML = ['<option value="">' + esc(allLabel) + "</option>"].concat(items.map(it =>
+    '<option value="' + esc(it["名称"]) + '">' + esc(it["标签"] || it["名称"]) +
+    (it["候选数"] == null ? "" : "（" + it["候选数"] + "）") + "</option>")).join("");
+  const hit = items.some(it => it["名称"] === value) ? value : "";
+  sel.value = hit;
+  sel.disabled = !items.length;
+  return hit;
+}
+
+function pickSyncFilters() {
+  const tree = pickTree();
+  /* 「未归类」也做成一个可选项：这次没采到它的行业板块时，概念股会落到这里 */
+  const others = tree["未归类"] || [];
+  const l1Items = (tree["行业"] || []).slice();
+  if (others.length) {
+    l1Items.push({ 名称: "未归类", 标签: "未归类（本次未采集该行业板块）",
+                   候选数: others.reduce((n, x) => n + (x["候选数"] || 0), 0), 子项: others });
+  }
+  pickUI.l1 = pickFillSelect($("#console-pick-l1"), l1Items, pickUI.l1, "全部行业");
+  const l1node = l1Items.find(x => x["名称"] === pickUI.l1);
+  pickUI.sub = pickFillSelect($("#console-pick-sub"), (l1node || {})["子项"] || [], pickUI.sub,
+    pickUI.l1 ? "该行业全部细分" : "先选一级行业");
+  pickUI.theme = pickFillSelect($("#console-pick-theme"), tree["概念"], pickUI.theme, "全部主题");
+  const tnode = (tree["概念"] || []).find(x => x["名称"] === pickUI.theme);
+  pickUI.concept = pickFillSelect($("#console-pick-concept"), (tnode || {})["子项"] || [], pickUI.concept,
+    pickUI.theme ? "该主题全部概念" : "先选主题");
+  const subSel = $("#console-pick-sub"), conSel = $("#console-pick-concept");
+  if (subSel) subSel.disabled = !l1node;
+  if (conSel) conSel.disabled = !tnode;
+}
+
+function pickFilteredRows() {
+  return ((pickUI.data || {})["行"] || []).filter(r => {
+    if (pickUI.mods.size && !pickUI.mods.has(r["模块"])) return false;
+    if (pickUI.l1 && r["一级行业"] !== pickUI.l1) return false;
+    if (pickUI.sub && r["细分"] !== pickUI.sub) return false;
+    if (pickUI.theme && r["概念主题"] !== pickUI.theme) return false;
+    if (pickUI.concept && r["来源板块"] !== pickUI.concept) return false;
+    return true;
+  });
+}
+
+function pickPlanText(row) {
+  const parts = [];
+  const push = (label, slot) => {
+    if (!slot || slot["价位"] == null || slot["价位"] === "") return;
+    const why = slot["依据"] ? ' <span class="muted">· ' + esc(slot["依据"]) + "</span>" : "";
+    parts.push("<b>" + label + "</b> " + esc(slot["价位"]) + why);
+  };
+  push("买点", row["买点"]);
+  push("止损", row["止损"]);
+  push("止盈点", row["止盈点"]);
+  if (num(row["止盈点数"]) > 1) {
+    parts.push('<span class="muted">另 ' + (num(row["止盈点数"]) - 1) + " 个目标位见荐股页</span>");
+  }
+  return parts.join(" ｜ ");
+}
+
+function pickGradeCls(g) {
+  return g === "强" ? "ok" : (g === "偏强" ? "accent" : (g === "弱" ? "bad" : "flat"));
+}
+
+function pickRankRow(row, i) {
+  const code = row["代码"] || "", name = row["名称"] || "", place = num(row["首推名次"]);
+  const tag = place ? chip("首推" + (RANK_PLACE[place - 1] || place) +
+    (row["首推评级"] ? " " + row["首推评级"] : ""), "accent") : "";
+  const stale = row["价格来源"] === "东财实时行情" ? "" : ' <span class="muted">产物价</span>';
+  let html = "<tr>" +
+    '<td class="num muted">' + (i + 1) + "</td>" +
+    '<td><a href="#" class="rk-code" data-code="' + esc(code) + '"><b>' + esc(name) + "</b> " +
+      '<span class="mono muted">' + esc(code) + "</span></a>" +
+      (row["是否持仓"] ? ' <span class="chip flat">持仓</span>' : "") +
+      (row["是否自选"] ? ' <span class="chip flat">自选</span>' : "") + "</td>" +
+    "<td>" + chip(row["模块"] || "—", "flat") + "</td>" +
+    "<td>" + esc(row["来源板块"] || "—") +
+      ' <span class="muted">' + esc(row["一级行业"] || "") + "</span></td>" +
+    '<td class="num">' + (row["现价"] == null ? '<span class="muted">未抓数</span>'
+      : fmt(row["现价"])) + stale + "</td>" +
+    '<td class="num ' + pctClass(row["涨跌幅_pct"]) + '">' + fmtPct(row["涨跌幅_pct"]) + "</td>" +
+    '<td class="num">' + fmt(row["机械分"], 1) + "</td>" +
+    '<td class="num"><b>' + (row["推荐度"] == null ? "—" : fmt(row["推荐度"], 1)) + "</b>" +
+      (num(row["加成"]) ? ' <span class="muted">+' + fmt(row["加成"], 0) + "</span>" : "") + "</td>" +
+    "<td>" + badge(row["评级"] || "—", pickGradeCls(row["评级"])) + " " + tag + "</td>" +
+    '<td class="num rk-ops">' +
+      '<button class="btn sm ghost" data-rk-watch="' + esc(code) + '" data-rk-name="' + esc(name) + '">自选</button>' +
+      '<button class="btn sm ghost" data-rk-run="' + esc(code) + '">研判</button>' +
+      '<button class="btn sm ghost" data-rk-kline="' + esc(code) + '" data-rk-name="' + esc(name) + '">K线</button>' +
+    "</td></tr>";
+  const plan = pickPlanText(row);
+  if (plan) html += '<tr class="rk-plan"><td></td><td colspan="9">' + plan + "</td></tr>";
+  return html;
+}
+
+function bindPickRank(root) {
+  if (!root) return;
+  root.querySelectorAll(".rk-code").forEach(a => a.addEventListener("click", e => {
+    e.preventDefault();
+    openCodeReport(a.dataset.code);
+  }));
+  root.querySelectorAll("[data-rk-watch]").forEach(b => b.addEventListener("click", async () => {
+    try {
+      const res = await api("/api/watchlist/add", {
+        method: "POST",
+        body: JSON.stringify({ code: b.dataset.rkWatch, name: b.dataset.rkName || "", note: "荐股榜" }),
+      });
+      if (!res.ok) { toast(res.error || "加入自选失败", "bad"); return; }
+      toast("已加入自选：" + b.dataset.rkWatch, "ok");
+      if (State.state) {
+        State.state["自选股"] = res["自选股"] || State.state["自选股"];
+        State.state["代码候选"] = res["代码候选"] || State.state["代码候选"];
+      }
+    } catch (e) { toast(e.message, "bad"); }
+  }));
+  root.querySelectorAll("[data-rk-run]").forEach(b =>
+    b.addEventListener("click", () => cardHandlers.onRun(b.dataset.rkRun)));
+  root.querySelectorAll("[data-rk-kline]").forEach(b =>
+    b.addEventListener("click", () => showKlineModal(b.dataset.rkKline, b.dataset.rkName || "")));
+}
+
+function renderPickTable() {
+  const box = $("#console-pick");
+  const more = $("#console-pick-more");
+  if (!box) return;
+  const rows = pickFilteredRows();
+  const total = ((pickUI.data || {})["行"] || []).length;
+  if (!rows.length) {
+    box.innerHTML = '<div class="empty">当前筛选下没有候选。</div>';
+    if (more) more.textContent = "筛选后 0 只 / 共 " + total + " 只";
+    return;
+  }
+  const show = pickUI.showAll ? rows : rows.slice(0, PICK_TOP);
+  box.innerHTML = '<div class="table-wrap"><table class="tbl"><thead><tr>' +
+    "<th>#</th><th>标的</th><th>模块</th><th>来源板块</th>" +
+    '<th class="num">现价</th><th class="num">涨跌幅</th><th class="num">机械分</th>' +
+    '<th class="num">推荐度</th><th>机械评级</th><th></th></tr></thead><tbody>' +
+    show.map((r, i) => pickRankRow(r, i)).join("") + "</tbody></table></div>";
+  if (more) {
+    more.textContent = "筛选后 " + rows.length + " 只 / 共 " + total + " 只" +
+      (rows.length > PICK_TOP
+        ? (pickUI.showAll ? " · 已显示全部" : " · 已显示前 " + PICK_TOP + " 行") : "");
+    if (rows.length > PICK_TOP) {
+      more.innerHTML += ' <button class="btn sm ghost rk-more">' +
+        (pickUI.showAll ? "只看前 " + PICK_TOP + " 行" : "显示全部 " + rows.length + " 行") + "</button>";
+      more.querySelector(".rk-more").addEventListener("click", () => {
+        pickUI.showAll = !pickUI.showAll;
+        renderPickTable();
+      });
+    }
+  }
+  bindPickRank(box);
+}
+
+export function renderPickRank(rank) {
+  pickUI.data = rank || null;
+  const rows = ((rank || {})["行"]) || [];
+  const prod = (rank || {})["产物"];
+  const sum = $("#console-pick-sum");
+  const hints = $("#console-pick-hints");
+  const src = $("#console-pick-src");
+  const more = $("#console-pick-more");
+  const modBox = $("#console-pick-mods");
+  if (!rows.length) {
+    pickUI.mods = new Set();
+    if (modBox) modBox.innerHTML = "";
+    if (sum) sum.textContent = "";
+    if (src) src.textContent = "";
+    if (more) more.textContent = "";
+    pickSyncFilters();
+    const box = $("#console-pick");
+    if (box) box.innerHTML = '<div class="empty">还没有荐股结果。点右上「一键去跑荐股」跳荐股页选板块跑一次（1 次模型调用）。</div>';
+  } else {
+    const mods = pickModulesOf(rows);
+    const keep = Array.from(pickUI.mods).filter(m => mods.indexOf(m) >= 0);
+    pickUI.mods = new Set(keep.length ? keep : mods);
+    if (modBox) {
+      modBox.innerHTML = mods.map(m => '<button data-rk-mod="' + esc(m) + '"' +
+        (pickUI.mods.has(m) ? ' class="on"' : "") + ">" + esc(m) + "</button>").join("");
+    }
+    if (sum) {
+      sum.textContent = rows.length + " 只候选 · 模块 " + mods.join("/") +
+        (prod ? " · 产物 " + (prod["产物时间"] || prod["生成时间"] || "") : "");
+    }
+    if (src) {
+      const live = rows.filter(r => r["价格来源"] === "东财实时行情").length;
+      src.textContent = live ? "实时价 " + live + "/" + rows.length + " 只"
+        : "产物快照价（点「刷新实盘价」取实时）";
+    }
+    pickSyncFilters();
+    renderPickTable();
+  }
+  if (hints) {
+    const list = (((rank || {})["提示"]) || []).slice();
+    const others = ((rank || {})["筛选树"] || {})["未归类"] || [];
+    if (others.length) {
+      const n = others.reduce((sum, x) => sum + (x["候选数"] || 0), 0);
+      list.push("有 " + n + " 只候选没有归到一级行业（本次没采它们的行业板块）：可在行业筛选里选「未归类」查看");
+    }
+    if ((rank || {})["口径"]) list.push(rank["口径"]);
+    hints.innerHTML = list.map(h => "· " + esc(h)).join("<br>");
+  }
+}
+
+function pickGoto() {
+  const rank = pickUI.data || {};
+  const prod = rank["产物"] || {};
+  const saved = prod["筛选"] || {};
+  const mods = pickUI.mods.size ? Array.from(pickUI.mods) : (prod["模块"] || []);
+  const savedInd = (saved["行业"] || []).map(x => ({
+    名称: x["名称"], 细分: Array.isArray(x["细分"]) ? x["细分"] : [],
+  })).filter(x => x["名称"]);
+  let industry = [], concepts = [];
+  if (pickUI.l1) {
+    industry = [{ 名称: pickUI.l1, 细分: pickUI.sub ? [pickUI.sub] : [] }];
+  } else {
+    industry = savedInd;
+  }
+  if (pickUI.concept) {
+    concepts = [pickUI.concept];
+  } else if (pickUI.theme) {
+    const node = (pickTree()["概念"] || []).find(x => x["名称"] === pickUI.theme);
+    concepts = ((node || {})["子项"] || []).map(x => x["名称"]);
+  } else if (!pickUI.l1) {
+    concepts = (saved["概念"] || []).map(x => x["名称"] || x).filter(Boolean);
+  }
+  const api2 = viewApi("pick");
+  const done = api2.prefill ? api2.prefill({ 模块: mods, 行业: industry, 概念: concepts }) : null;
+  showView("pick");
+  if (done && done.then) {
+    done.then(r => {
+      if (r) toast("已按榜单筛选预填（行业 " + r["行业"] + " 个 / 概念 " + r["概念"] + " 个），点「开始荐股」即可", "ok");
+      else toast("已切到荐股页，请勾选要跑的板块", "warn");
+    }).catch(() => {});
+  }
+}
+
 export async function loadConsole(refresh) {
   const body = $("#console-body");
   if (body && !hasOverview) body.innerHTML = '<div class="muted">加载中 …</div>';
@@ -292,6 +551,7 @@ export async function loadConsole(refresh) {
     ]);
     State.state = st;
     renderOverview(ov);
+    renderPickRank(ov["荐股"]);
     await loadAlerts();                 // 消息队列（服务端落盘的那份）
     if (body) body.innerHTML = renderSystem(st, mk, tr);
     const at = $("#console-at");
@@ -363,6 +623,45 @@ export function initConsoleView() {
   }
   const bell = $("#btn-alerts");
   if (bell) bell.addEventListener("click", () => openAlertDrawer());
+
+  /* 荐股榜单：模块按钮多选切换 + 行业/概念两级下拉 + 重置 + 去跑荐股 */
+  const modBox = $("#console-pick-mods");
+  if (modBox) modBox.addEventListener("click", e => {
+    const btn = e.target.closest("[data-rk-mod]");
+    if (!btn) return;
+    const mod = btn.dataset.rkMod;
+    if (pickUI.mods.has(mod)) {
+      if (pickUI.mods.size <= 1) { toast("至少保留一个模块", "warn"); return; }
+      pickUI.mods.delete(mod);
+      btn.classList.remove("on");
+    } else {
+      pickUI.mods.add(mod);
+      btn.classList.add("on");
+    }
+    renderPickTable();
+  });
+  [["#console-pick-l1", 0], ["#console-pick-sub", 1],
+   ["#console-pick-theme", 2], ["#console-pick-concept", 3]].forEach(pair => {
+    const el = $(pair[0]);
+    if (!el) return;
+    el.addEventListener("change", () => {
+      if (pair[1] === 0) { pickUI.l1 = el.value; pickUI.sub = ""; }
+      else if (pair[1] === 1) { pickUI.sub = el.value; }
+      else if (pair[1] === 2) { pickUI.theme = el.value; pickUI.concept = ""; }
+      else { pickUI.concept = el.value; }
+      pickSyncFilters();
+      renderPickTable();
+    });
+  });
+  const pickReset = $("#btn-pick-reset");
+  if (pickReset) pickReset.addEventListener("click", () => {
+    pickUI.mods = new Set(pickModulesOf((pickUI.data || {})["行"] || []));
+    pickUI.l1 = pickUI.sub = pickUI.theme = pickUI.concept = "";
+    pickUI.showAll = false;
+    renderPickRank(pickUI.data);
+  });
+  const pickGo = $("#btn-pick-goto");
+  if (pickGo) pickGo.addEventListener("click", pickGoto);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && poller) poller.kick();
   });

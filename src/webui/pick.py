@@ -404,11 +404,12 @@ def pick_concept_theme(name):
 def pick_param(body):
     """整理荐股筛选参数（带默认与上限保护）。"""
     body = body or {}
-    # 模块只支持单选：取 module / modules 里第一个合法值，默认第一个模块（短线）
+    # 模块支持多选：module / modules 合并后按固定顺序去重（同时传多个也只留一份）
     asked = [body.get("module")] + list(body.get("modules") or [])
-    picked = [str(m).strip() for m in asked
-              if str(m or "").strip() in PICK_MODULE_CYCLE]
-    modules = [picked[0]] if picked else [PICK_MODULES[0][0]]
+    wanted = {str(m).strip() for m in asked if str(m or "").strip() in PICK_MODULE_CYCLE}
+    modules = [name for name, _ in PICK_MODULES if name in wanted]
+    if not modules:
+        modules = [PICK_MODULES[0][0]]
     industry, seen_i = [], set()
     for raw in (body.get("industry") or []):
         if not isinstance(raw, dict):

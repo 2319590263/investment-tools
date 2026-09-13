@@ -135,7 +135,7 @@ class TestApiSmoke(unittest.TestCase):
         """总控台数据：卡片、汇总、时段、刷新元信息都要在（默认本地口径，不联网）。"""
         status, body = self.server.get("/api/overview")
         self.assertEqual(status, 200, body)
-        for key in ("时段", "刷新", "汇总", "持仓", "自选", "提醒", "路径"):
+        for key in ("时段", "刷新", "汇总", "持仓", "自选", "荐股", "提醒", "路径"):
             self.assertIn(key, body)
         self.assertTrue(body["时段"]["名称"])
         self.assertIn(body["刷新"]["模式"], ("本地", "实时"))
@@ -148,6 +148,30 @@ class TestApiSmoke(unittest.TestCase):
             card = body["持仓"][0]
             for field in ("成本价", "持仓市值_元", "浮动盈亏_元", "可用股数_可卖"):
                 self.assertIn(field, card)
+
+    def test_overview_pick_rank(self):
+        """总控台荐股榜：结构完整、按推荐度降序；没有产物也要能读（不联网、不写盘）。"""
+        status, body = self.server.get("/api/overview")
+        self.assertEqual(status, 200, body)
+        pk = body["荐股"]
+        for key in ("产物", "口径", "行", "筛选树", "提示"):
+            self.assertIn(key, pk)
+        self.assertIsInstance(pk["行"], list)
+        for key in ("行业", "概念", "未归类"):
+            self.assertIn(key, pk["筛选树"])
+        self.assertIn("推荐度", pk["口径"])
+        for row in pk["行"]:
+            for field in ("代码", "名称", "模块", "一级行业", "推荐度", "机械分",
+                          "价格来源", "现价", "是否持仓", "是否自选"):
+                self.assertIn(field, row)
+            self.assertLessEqual(row["推荐度"] or 0, 100)
+        if len(pk["行"]) > 1:
+            scores = [r["推荐度"] for r in pk["行"] if r["推荐度"] is not None]
+            self.assertEqual(scores, sorted(scores, reverse=True), "榜单必须按推荐度降序")
+        # refresh=1 在没有外网时也必须 200（报价降级不影响榜单结构）
+        status2, body2 = self.server.get("/api/overview?refresh=1")
+        self.assertEqual(status2, 200, body2)
+        self.assertIn("荐股", body2)
 
     def test_alerts_queue(self):
         """消息队列接口（只读；清空接口有破坏性，留给单元测试用临时文件验证）。"""

@@ -76,6 +76,27 @@
           <div class="card-b"><div class="stock-grid" id="console-watch"><div class="muted">加载中 …</div></div></div>
         </div>
 
+        <div class="card" id="console-pick-card">
+          <div class="card-h"><span>荐股榜单</span><span class="muted" id="console-pick-sum"></span>
+            <div class="spacer"></div>
+            <span class="muted" id="console-pick-src"></span></div>
+          <div class="card-b">
+            <div class="row" id="console-pick-filters" style="flex-wrap:wrap">
+              <div class="seg" id="console-pick-mods"></div>
+              <select id="console-pick-l1" class="inline-select"></select>
+              <select id="console-pick-sub" class="inline-select"></select>
+              <select id="console-pick-theme" class="inline-select"></select>
+              <select id="console-pick-concept" class="inline-select"></select>
+              <div class="spacer"></div>
+              <button class="btn ghost" id="btn-pick-reset">重置筛选</button>
+              <button class="btn ghost" id="btn-pick-goto">一键去跑荐股</button>
+            </div>
+            <div id="console-pick-hints" class="hint" style="margin:6px 0"></div>
+            <div id="console-pick"></div>
+            <div class="hint" id="console-pick-more"></div>
+          </div>
+        </div>
+
         <div class="grid-2">
           <div class="card">
             <div class="card-h"><span>系统状态</span><span class="muted" id="console-at"></span>
@@ -318,7 +339,7 @@
             <div class="card-b">
               <div class="hint" id="pick-sel-count">已选：行业 0 个 ｜ 概念 0 个</div>
               <div class="field">
-                <label>模块 <span class="muted">单选：不同模块用不同权重</span></label>
+                <label>模块 <span class="muted">可多选：每个模块分别换权重打分，事实包随之变大</span></label>
                 <div class="seg" id="pick-modules">
                   <button data-module="短线" class="on">短线 1-5 日</button>
                   <button data-module="波段">波段 2-6 周</button>
