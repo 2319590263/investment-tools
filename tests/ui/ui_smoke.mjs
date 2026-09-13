@@ -156,16 +156,17 @@ if (rkRows > 0) {
   if (!capped) failed++;
   /* 榜单「自选」按钮：加完上方自选股卡区要立刻出现这只。
      会短暂写 data/user/自选股.md（备注“荐股榜”），无论成败都在 finally 里删回。 */
-  const pickTarget = await page.evaluate(() => {
-    const rows = Array.from(document.querySelectorAll("#console-pick table.tbl tbody tr:not(.rk-plan)"));
-    for (const tr of rows) {
-      const chips = Array.from(tr.querySelectorAll(".chip")).map(c => c.textContent.trim());
-      if (chips.indexOf("自选") >= 0) continue;
-      const a = tr.querySelector(".rk-code"), btn = tr.querySelector("[data-rk-watch]");
-      if (a && btn) return a.dataset.code;
-    }
-    return null;
+  /* 只在「真实自选清单里确实没有」的候选上做增删——只信页面标记会误动用户已有的自选股 */
+  const watchNow = await page.evaluate(async () => {
+    try { return ((await (await fetch("/api/watchlist")).json())["条目"] || []); } catch (e) { return []; }
   });
+  const knownWatch = new Set(watchNow.map(x => String(x["代码"] || "").slice(0, 6)));
+  const candidates = await page.evaluate(() => Array.from(
+    document.querySelectorAll("#console-pick table.tbl tbody tr:not(.rk-plan)"))
+    .filter(tr => Array.from(tr.querySelectorAll(".chip")).every(c => c.textContent.trim() !== "自选"))
+    .map(tr => { const a = tr.querySelector(".rk-code"); return a ? a.dataset.code : null; })
+    .filter(Boolean));
+  const pickTarget = candidates.filter(c => !knownWatch.has(c))[0] || null;
   if (pickTarget) {
     const beforeCards = await page.locator("#console-watch .stock-card").count();
     try {

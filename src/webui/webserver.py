@@ -14,6 +14,7 @@ import os
 import re
 import secrets
 import socket
+import sys
 import threading
 import webbrowser
 
@@ -46,6 +47,18 @@ MIME = {
 LOGIN_COOKIE = "aiplan_session"
 
 
+# 客户端中途断开（刷新 / 切页 / 取消轮询）时 Windows 会给这几个错误码：
+# 10053 本机软件中止、10054 对端强制关闭、10058 已无法发送。它们不是服务端故障。
+_GONE_WINERRORS = (10053, 10054, 10058)
+
+
+def is_disconnect(exc):
+    """判断异常是不是「客户端已经走了」——这类不该记成服务端异常，也不该回 500。"""
+    if isinstance(exc, (BrokenPipeError, ConnectionResetError, ConnectionAbortedError, ConnectionError)):
+        return True
+    return isinstance(exc, OSError) and getattr(exc, "winerror", None) in _GONE_WINERRORS
+
+
 LAN_PASSWORD_ENV = "AIPLAN_WEBUI_PASSWORD"
 LAN_PASSWORD_FILE = os.path.join(ROOT, "config", "webui配置.json")
 
@@ -74,6 +87,7 @@ def resolve_lan_password(explicit=None):
 class Handler(BaseHTTPRequestHandler):
     server_version = "aiplan-webui/1.0"
     protocol_version = "HTTP/1.1"
+    _gone = False                      # 客户端已断：后面的写回一律跳过
 
     def log_message(self, fmt, *args):  # 静默默认访问日志
         pass
@@ -157,15 +171,22 @@ class Handler(BaseHTTPRequestHandler):
     def _send(self, code, body, ctype="application/json; charset=utf-8"):
         if isinstance(body, str):
             body = body.encode("utf-8")
-        self.send_response(code)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
+        if self._gone:                 # 已经知道对端没了就别再写
+            return False
         try:
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
             self.wfile.write(body)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
+        except Exception as e:         # noqa: BLE001
+            if not is_disconnect(e):
+                raise
+            self._gone = True          # 客户端断开：安静收场，不当作异常
+            self.close_connection = True
+            return False
+        return True
 
     def _json(self, obj, code=200):
         self._send(code, json.dumps(obj, ensure_ascii=False, default=str))
@@ -199,9 +220,9 @@ class Handler(BaseHTTPRequestHandler):
             if path.startswith("/api/"):
                 return self._api_get(path, q)
             return self._static(path)
-        except BrokenPipeError:
-            pass
         except Exception as e:  # noqa: BLE001
+            if self._gone or is_disconnect(e):
+                return                 # 对端已经走了：不用再回 500（回也会再炸一次）
             self._err("服务端异常：%r" % (e,), 500)
 
     def _api_get(self, path, q):
@@ -353,9 +374,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._err("请求体不是合法 JSON：%s" % e)
         try:
             return self._api_post(path, body)
-        except BrokenPipeError:
-            pass
         except Exception as e:  # noqa: BLE001
+            if self._gone or is_disconnect(e):
+                return
             self._err("服务端异常：%r" % (e,), 500)
 
     def _api_post(self, path, body):
@@ -569,6 +590,13 @@ class LocalServer(ThreadingHTTPServer):
         self.password = password
         self.session_token = secrets.token_urlsafe(32) if password else None
         super().__init__(server_address, RequestHandlerClass)
+
+    def handle_error(self, request, client_address):
+            """客户端断连不算服务端异常：不打 traceback，其余照旧交给父类。"""
+            exc = sys.exc_info()[1]
+            if exc is None or is_disconnect(exc):
+                return
+            super().handle_error(request, client_address)
 
 
 def pick_port(host, port, password=None):
