@@ -63,22 +63,30 @@ class TestPickParams(unittest.TestCase):
         # 全非法时回退默认
         self.assertEqual(self.mod.pick_param({"modules": ["不存在"]})["modules"], ["短线"])
 
-    def test_top_codes_merges_modules_into_one_list(self):
-        """四个模块合并后只留 total 只：每模块先保底，再按全局最高机械分补足。"""
+    def test_module_picks_one_module_per_stock(self):
+        """四模块合并只留 total 只，且每只股票只归一个模块。"""
         row = lambda c, s: {"代码": c, "机械分": s}          # noqa: E731
         scored = {
-            "短线": [row("600001", 99.0), row("600002", 98.0), row("600003", 97.0), row("600004", 96.0)],
-            "中线": [row("600001", 70.0), row("600005", 90.0), row("600006", 89.0), row("600007", 88.0)],
+            "短线": [row("600001", 99.0), row("600002", 98.0), row("600010", 60.0)],
+            "波段": [row("600003", 90.0), row("600004", 88.0), row("600005", 86.0)],
+            "中线": [row("600006", 80.0), row("600007", 79.0), row("600008", 78.0)],
+            "长线": [row("600009", 70.0), row("600011", 69.0), row("600012", 68.0)],
         }
+        mods = ["短线", "波段", "中线", "长线"]
         self.assertEqual(self.mod.PICK_PAGE_TOP, 30)         # 总榜固定 30 只（不是每模块 30）
-        self.assertEqual(self.mod.pick_top_codes(scored, ["短线", "中线"], total=5, floor=2),
-                         {"600001", "600002", "600003", "600004", "600005"})
-        self.assertEqual(self.mod.pick_top_codes(scored, ["短线", "中线"], total=3, floor=2),
-                         {"600001", "600002", "600005"})     # 保底占满就不再补足
-        self.assertEqual(len(self.mod.pick_top_codes(scored, ["短线", "中线"], total=30, floor=3)), 7)
-        self.assertEqual(self.mod.pick_top_codes({}, ["短线"], total=5, floor=2), set())
-        self.assertEqual(self.mod.pick_top_codes({"短线": [{"代码": "600001", "机械分": None}]},
-                                                ["短线"], total=5, floor=2), {"600001"})
+        assign = self.mod.pick_module_picks(scored, mods, total=10, floor=2)
+        self.assertEqual(len(assign), 10)                    # 总名额受 total 约束
+        self.assertEqual(set(assign), set(assign.keys()))    # 每只股票只出现一次
+        self.assertEqual(set(assign.values()), set(mods))    # 四个模块都要有货（保底）
+        self.assertEqual(assign["600001"], "短线")
+        self.assertEqual(assign["600009"], "长线")
+        self.assertNotIn("600012", assign)                   # total=10 时最后一名的长线股进不来
+        small = self.mod.pick_module_picks(scored, mods, total=4, floor=1)
+        self.assertEqual(len(small), 4)
+        self.assertEqual(set(small.values()), set(mods))
+        self.assertEqual(self.mod.pick_module_picks({}, ["短线"], total=5, floor=2), {})
+        self.assertEqual(self.mod.pick_module_picks({"短线": [{"代码": "600001", "机械分": None}]},
+                                                   ["短线"], total=5, floor=2), {"600001": "短线"})
 
     def test_clamps_out_of_range(self):
         p = self.mod.pick_param({"per_board": 0, "max_candidates": 99999, "max_chars": 10})

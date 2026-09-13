@@ -404,33 +404,40 @@ def pick_concept_theme(name):
     return PICK_THEME_OTHER
 
 
-def pick_top_codes(scored, modules, total=PICK_PAGE_TOP, floor=PICK_MODULE_MIN):
-    """四个模块合并后只留 total 只：每模块先保底 floor 只，其余按全局最高机械分补足。
+def pick_module_picks(scored, modules, total=PICK_PAGE_TOP, floor=PICK_MODULE_MIN):
+    """四模块合并只留 total 只，**每只股票只归一个模块**。
 
-    scored = {模块: [已按该模块机械分降序的候选行]}；返回选中的代码集合。
-    保底是为了让模型对每个模块都有可选标的（否则某模块可能在合并榜里一只都不剩）。
+    规则：每个模块先按它自己的排名保底 floor 只（不抢别家已占的），
+    剩下的名额按全局最高机械分补足，并归到该股分数最高的那个模块。
+    返回 {代码: 模块}；scored = {模块: [已按该模块机械分降序的候选行]}。
     """
-    picked, best = [], {}
-    for m in modules:
-        for row in (scored.get(m) or [])[:floor]:
+    assign = {}
+    for m in modules:                       # 保底：每模块从自己的排名里拿 floor 只
+        took = 0
+        for row in scored.get(m) or []:
+            if took >= floor or len(assign) >= total:
+                break
             code = row.get("代码")
-            if code and code not in picked and len(picked) < total:
-                picked.append(code)
-    for m in modules:
+            if not code or code in assign:
+                continue
+            assign[code] = m
+            took += 1
+    best = {}
+    for m in modules:                       # 全局最高机械分（记录它出自哪个模块）
         for row in scored.get(m) or []:
             code = row.get("代码")
             if not code:
                 continue
             score = row.get("机械分")
             score = -1.0 if score is None else float(score)
-            if code not in best or score > best[code]:
-                best[code] = score
-    for code in sorted(best, key=lambda c: (-best[c], c)):
-        if len(picked) >= total:
+            if code not in best or score > best[code][0]:
+                best[code] = (score, m)
+    for code, (_score, m) in sorted(best.items(), key=lambda kv: (-kv[1][0], kv[0])):
+        if len(assign) >= total:
             break
-        if code not in picked:
-            picked.append(code)
-    return set(picked[:total])
+        if code not in assign:
+            assign[code] = m
+    return assign
 
 
 def pick_param(body):

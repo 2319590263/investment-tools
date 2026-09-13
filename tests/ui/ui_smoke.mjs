@@ -328,6 +328,12 @@ if (perModuleTables !== 0) failed++;
 const hasPriceCol = await page.locator('#pick-cand tbody tr td.wrap').count();
 console.log(`${hasPriceCol > 0 ? "PASS" : "FAIL"}  候选榜带精确价位列（${hasPriceCol} 行有）`);
 if (!hasPriceCol) failed++;
+/* 每只股票只归一个模块（模块列只有一个模块标签） */
+const multiModRows = await page.evaluate(() => Array.from(
+  document.querySelectorAll("#pick-cand tbody tr"))
+  .filter(tr => tr.children[2] && tr.children[2].querySelectorAll(".chip").length > 1).length);
+console.log(`${multiModRows === 0 ? "PASS" : "FAIL"}  候选榜一票一模块（多模块行 ${multiModRows}）`);
+if (multiModRows !== 0) failed++;
 
 await browser.close();
 
