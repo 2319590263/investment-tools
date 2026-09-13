@@ -11,7 +11,8 @@ import unittest
 from _common import STATIC
 
 JS_DIR = os.path.join(STATIC, "js")
-VIEWS = ("console", "run", "report", "history", "holdings", "watch", "pick", "models", "market")
+VIEWS = ("console", "track", "run", "report", "history", "holdings", "watch", "pick",
+         "models", "market")
 
 
 def read(path):

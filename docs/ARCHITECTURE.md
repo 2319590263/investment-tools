@@ -39,9 +39,13 @@ webserver  ← __main__（python -m webui）
    │     └── store ──┐
    ├── pick_run    荐股取数与编排（东财抓取、缓存、模型点评）→ pick（纯逻辑）
    ├── plancheck   报告实盘复核：实盘价 × 交易计划（机械判定 + 当前时段策略点评）
+   ├── track       标的跟踪纯逻辑：适用交易日 / 执行记录 / 事实包 / Markdown / 产物读写
+   │     ├── track_run   跟踪执行层：取数 → 一次研判档调用（可选复核档）→ 落盘
+   │     └── trackview   跟踪页数据组装：清单卡片 + 详情（最新计划 / 执行 / 历史）
    ├── quotes      行情取数：批量报价（东财，1 次请求）+ 当日分时（腾讯，60 秒缓存 + 串行限速）
    ├── overview    总控台数据：持仓 / 自选卡片、计划线、到价提醒（只读）
    │     └── pickrank  荐股榜：最新产物按股票去重合并 + 推荐度排序（纯函数）
+   ├── planlines   计划线口径：关键价位 + 计划 → 买点 / 减仓 / 止损 / 目标（报告页 / 总控台 / 跟踪页共用）
    ├── alerts      到价消息队列：data/ai/alerts.jsonl（保留最近 500 条）
    │     └── background  把 stock3d / pan 快照裁成「个股量价 + 大盘 + 板块」背景数据
    ├── archive     报告 / plan_log / 荐股产物的读取、列举、删除
@@ -64,6 +68,9 @@ webserver  ← __main__（python -m webui）
 | 同花顺客户端适配 | `holdings_ths.py`；第三方依赖只在 `.venv-holdings` 中导入 |
 | 人工验证码流转 | 抓取子进程写本地图片/会话文件，WebUI `GET/POST /api/holdings/captcha` 读取与回填 |
 | 新的荐股评分维度 | `pick.py`（纯函数，必须可单测） |
+| 标的跟踪的新规则（适用交易日 / 执行记录 / 事实包裁剪） | `track.py`（纯函数，必须可单测） |
+| 标的跟踪的取数与编排 | `track_run.py`；页面数据在 `trackview.py` |
+| 新的计划线口径 | `planlines.py`（报告页 / 总控台 / 跟踪页共用，改一处三处生效） |
 
 ## 四、前端模块图
 
@@ -79,7 +86,8 @@ main.js                入口：initNav + 各视图 init + 首屏刷新
   ├── ui/cards.js      报告 / 大盘共用的卡片原语
    ├── ui/kline.js      K 线绘制与缩放
    ├── ui/pickfilter.js 荐股模块多选（记忆）+ 从榜单预填筛选区
-   └── views/*.js       九个页面，各自渲染 + 注册（console 总控台）
+   ├── ui/trackcards.js 跟踪清单 / 计划摘要 / 执行录入表 / 历史时间线（只拼 HTML）
+   └── views/*.js       十个页面，各自渲染 + 注册（console 总控台、track 标的跟踪）
 core/poller.js 自动刷新定时器（档位 / 交易时段 / 退避 / localStorage）；ui/stockcard.js 股票卡片与分时小图；
 mobile.css 仅作用于 body[data-shell="mobile"]，桌面版和 /m 共用同一份视图 DOM。
 ```
@@ -120,18 +128,27 @@ viewApi("report").refreshReports();
   并按原文件的 BOM / 换行风格写回。
 8. **删除**：一律移动进 `data/ai/.trash/<日期>/`（`archive.delete_*`），回收站
    `trash.py` 负责列出、恢复、以及超过 7 天的真删。
+9. **标的跟踪（每日计划 → 执行 → 次日计划）**：`POST /api/jobs {kind:"track"}` →
+   `track_run.run_track` 逐只标的：`quotes.fetch_quotes` 一次批量报价（1 次请求）+
+   `background.latest_pan/stock3d_tech` 背景 → `track.factpack_sections` 拼事实包（超上限先砍板块 →
+   大盘 → 个股形态）→ 一次研判档调用（可选复核档）→ `track.save_plan` 落
+   `data/ai/track/<日期>/`。执行情况由人工录入到同名 `*_track_exec.json`；上一份计划的适用交易日
+   早于本次时没填执行记录就跳过该标的（日志 `[WARN]`）。跟踪产物与报告同结构，报告页 / 实盘复核
+   可直接打开，总控台计划线取「报告 ∪ 跟踪」里每只标的最新一份。
 
 ## 六、HTTP 接口
 
-路由集中在 `src/webui/webserver.py`；GET 15 个、POST 12 个，字段名与旧版完全一致
+路由集中在 `src/webui/webserver.py`；字段名与旧版完全一致
 （重构时用 `scripts/api_snapshot.py` 逐字段对拍过）。清单：
 
 ```
 GET  /api/state /holdings /account /models /reports /report /history /symbols
      /market /market/forecast /plancheck /overview /alerts /kline /watchlist /trash /pick /pick/list
-     /pick/boards /pick/industry /blob
+     /pick/boards /pick/industry /tracklist /track/all /track /blob
 POST /api/holdings /account /models /alerts/clear /trash/restore /trash/purge /pick/delete
      /report/delete /watchlist/add /watchlist/remove /watchlist
+     /tracklist /tracklist/add /tracklist/remove /tracklist/import-watchlist
+     /track/exec /track/delete
      /jobs /jobs/<id>/cancel
 ```
 
@@ -142,6 +159,6 @@ POST /api/holdings /account /models /alerts/clear /trash/restore /trash/purge /p
 | 静态自检（结构 / 语法 / 模块图 / 密钥 / CLI 基线） | `python main.py check` |
 | 单元 + 接口回归（标准库 unittest） | `python main.py test` |
 | 重构前后接口对拍 | `python scripts/api_snapshot.py --out tmp/a.json` / `--compare tmp/a.json tmp/b.json` |
-| 桌面浏览器冒烟（九页渲染 + 重交互 + 0 报错） | `node tests/ui/ui_smoke.mjs` |
+| 桌面浏览器冒烟（十页渲染 + 重交互 + 0 报错） | `node tests/ui/ui_smoke.mjs` |
 | 手机浏览器冒烟（三视口 + 九页 + 无横向溢出 + 0 报错） | `node tests/ui/mobile_smoke.mjs` |
 | 打包源码 | `python scripts/build.py` |

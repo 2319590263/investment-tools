@@ -18,6 +18,7 @@ export const State = {
 
 export const VIEW_TITLE = {
   console: "总控台",
+  track: "标的跟踪",
   run: "运行研判", report: "报告", history: "历史与复盘",
   holdings: "持仓 / 账户", watch: "自选股", pick: "荐股",
   models: "模型配置", market: "大盘快照",

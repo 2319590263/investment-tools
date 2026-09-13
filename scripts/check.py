@@ -39,16 +39,21 @@ JS_MAX_LINES = 900
 
 PACKAGE_MODULES = ("__init__.py", "__main__.py", "paths.py", "sources.py", "store.py",
                       "archive.py", "market.py", "jobs.py", "pick.py", "pick_run.py",
-                      "pickrank.py", "background.py", "plancheck.py", "quotes.py", "overview.py",
-                   "alerts.py", "trash.py", "webserver.py", "run_aiplan.py",
+                   "pickrank.py", "background.py", "plancheck.py", "planlines.py", "quotes.py",
+                   "overview.py",
+                   "alerts.py", "trash.py", "track.py", "track_run.py", "trackview.py",
+                   "webserver.py", "run_aiplan.py",
                    "holdings_ths.py", "holdings_sync.py")
 JS_MODULES = ("main.js", "core/util.js", "core/api.js", "core/app.js", "core/poller.js",
               "core/mobile.js",
                   "ui/markdown.js", "ui/jsontree.js", "ui/modal.js", "ui/cards.js", "ui/kline.js",
                   "ui/stockcard.js", "ui/planprices.js", "ui/pickfilter.js", "ui/pickcards.js",
+                  "ui/trackcards.js",
               "views/run.js", "views/report.js", "views/history.js", "views/holdings.js",
-              "views/watch.js", "views/pick.js", "views/models.js", "views/market.js")
-VIEWS = ("console", "run", "report", "history", "holdings", "watch", "pick", "models", "market")
+              "views/watch.js", "views/pick.js", "views/models.js", "views/market.js",
+              "views/track.js")
+VIEWS = ("console", "track", "run", "report", "history", "holdings", "watch", "pick",
+         "models", "market")
 
 FAILS = []
 

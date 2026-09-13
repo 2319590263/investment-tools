@@ -25,11 +25,19 @@ from .jobs import JOBS, build_check_argv, build_run_argv, run_batch
 from .market import (build_market, build_state, build_symbols, latest_market_forecast,
                      load_kline, run_market_forecast)
 from .overview import build_overview
-from .paths import ACCOUNT_PATH, AIPLAN, DATA_DIR, MODELS_PATH, PICK_DIR, POOL_PATH, PYTHON, ROOT, STATIC_DIR, TRASH_DIR, TRASH_TTL_DAYS, WATCHLIST_PATH, inside, num, read_text, rel, save_like
+from .paths import ACCOUNT_PATH, AIPLAN, DATA_DIR, MODELS_PATH, PICK_DIR, POOL_PATH, PYTHON, ROOT, STATIC_DIR, TRACKLIST_PATH, TRASH_DIR, TRASH_TTL_DAYS, WATCHLIST_PATH, inside, num, read_text, rel, save_like
 from .pick import PICK_BOARD_TYPES, PICK_L1_INDUSTRIES, PICK_MAX_CANDIDATES, PICK_MAX_CONCEPTS, PICK_MODULES, PICK_PER_BOARD, pick_param
 from .pick_run import pick_boards_bundle, pick_l1_subs, run_pick
 from .plancheck import plancheck_bundle, run_plan_check
-from .store import load_account_bundle, load_holdings_bundle, load_models_bundle, load_watchlist, watchlist_add, watchlist_remove
+from .store import (load_account_bundle, load_holdings_bundle, load_models_bundle,
+                    load_tracklist, load_watchlist, tracklist_add, tracklist_import_watchlist,
+                    tracklist_remove, watchlist_add, watchlist_remove)
+from .track import delete_plan as delete_track_plan
+from .track import exec_summary as track_exec_summary
+from .track import save_exec as save_track_exec
+from .track_run import run_track
+from .trackview import build_detail as build_track_detail
+from .trackview import build_overview as build_track_overview
 from .trash import purge_trash_expired, restore_trash, trash_items
 
 
@@ -321,6 +329,23 @@ class Handler(BaseHTTPRequestHandler):
             limit = q.get("limit", ["50"])[0]
             return self._json({"items": alerts_store.list_alerts(limit),
                                "队列": alerts_store.info()})
+        if path == "/api/tracklist":
+            return self._json({"路径": rel(TRACKLIST_PATH),
+                               "存在": os.path.exists(TRACKLIST_PATH),
+                               "条目": load_tracklist(),
+                               "原文": read_text(TRACKLIST_PATH)})
+        if path == "/api/track/all":
+            refresh = (q.get("refresh", ["0"])[0] or "0") in ("1", "true", "yes")
+            return self._json(build_track_overview(refresh=refresh))
+        if path == "/api/track":
+            code = (q.get("code", [""])[0] or "").strip()
+            if not code:
+                return self._err("缺少 code（6 位证券代码）", 400)
+            refresh = (q.get("refresh", ["0"])[0] or "0") in ("1", "true", "yes")
+            data, err = build_track_detail(code, refresh=refresh)
+            if err:
+                return self._err(err, 400)
+            return self._json(data)
         if path.startswith("/api/jobs/"):
             rest = path[len("/api/jobs/"):]
             jid = rest.split("/")[0]
@@ -449,6 +474,38 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"ok": True, "已写入": written,
                                "备份": rel(bkp) if bkp else None,
                                "自选股": load_watchlist(), "代码候选": build_symbols()})
+        if path == "/api/tracklist":
+            text = body.get("text")
+            if not isinstance(text, str):
+                return self._err("缺少 text")
+            written, bkp = save_like(TRACKLIST_PATH, text)
+            return self._json({"ok": True, "已写入": written,
+                               "备份": rel(bkp) if bkp else None,
+                               "条目": load_tracklist()})
+        if path == "/api/tracklist/add":
+            items, err = tracklist_add(body.get("code"), body.get("name"), body.get("note"))
+            if err:
+                return self._err(err)
+            return self._json({"ok": True, "条目": items, "跟踪": load_tracklist()})
+        if path == "/api/tracklist/remove":
+            items, err = tracklist_remove(body.get("code"))
+            if err:
+                return self._err(err)
+            return self._json({"ok": True, "跟踪": load_tracklist()})
+        if path == "/api/tracklist/import-watchlist":
+            added, _items = tracklist_import_watchlist()
+            return self._json({"ok": True, "新增": added, "跟踪": load_tracklist()})
+        if path == "/api/track/exec":
+            doc, err = save_track_exec(body.get("计划路径"), body.get("条目"), body.get("总体备注"))
+            if err:
+                return self._err(err)
+            return self._json({"ok": True, "执行记录": doc,
+                               "执行摘要": track_exec_summary(doc)})
+        if path == "/api/track/delete":
+            result, err = delete_track_plan(body.get("path"))
+            if err:
+                return self._err(err)
+            return self._json(dict(result, ok=True, trash=trash_items()))
         if path == "/api/history/delete":
             if "line" not in body:
                 return self._err("缺少 line")
@@ -532,6 +589,25 @@ class Handler(BaseHTTPRequestHandler):
                 meta = {"label": "同步同花顺持仓", "只读": True}
                 job = JOBS.start(kind, argv, meta, label="同步同花顺持仓（只读）")
                 return self._json({"ok": True, "id": job["id"], "命令": job["命令"]})
+            elif kind == "track":
+                codes = [str(c).strip() for c in (body.get("codes") or []) if str(c).strip()]
+                if not codes:
+                    return self._err("没有可生成的标的：先在跟踪页勾选标的")
+                opts = {"codes": codes, "date": (body.get("date") or "").strip() or None,
+                        "profile": (body.get("profile") or "").strip() or None,
+                        "model_pro": (body.get("model_pro") or "").strip() or None,
+                        "api_base": (body.get("api_base") or "").strip() or None,
+                        "api_key": (body.get("api_key") or "").strip() or None,
+                        "review": bool(body.get("review")),
+                        "max_chars": body.get("max_chars")}
+                meta = {"label": "标的跟踪", "codes": codes, "profile": opts["profile"],
+                        "复核": opts["review"]}
+                label = ("生成每日计划（%d 只%s）"
+                         % (len(codes), "，含复核档" if opts["review"] else "，1 次模型调用/只"))
+                job = JOBS.start(kind, [], meta, label=label,
+                                 func=lambda log, ctl: run_track(log, ctl, opts))
+                return self._json({"ok": True, "id": job["id"], "命令": job["命令"],
+                                   "参数": meta})
             else:
                 return self._err("未知任务类型：%s" % kind)
             job = JOBS.start(kind, argv, meta)

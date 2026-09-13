@@ -233,6 +233,11 @@ def diagnose_job(job):
             return None
         return ("荐股失败：常见原因是网络/东财限流或模型 Key、余额；"
                 "日志里 [FAIL]/[WARN] 一行是原始原因。")
+    if kind == "track":
+        if rc in (None, 0):
+            return None
+        return ("标的跟踪失败：检查模型 Key/余额与网络；若日志里写「未录入上一份计划的执行情况」，"
+                "先在跟踪页把上一份计划的执行记录填好再生成。")
     if rc in (None, 0):
         return None
     code6_ = aiplan.code6(meta.get("code") or "")

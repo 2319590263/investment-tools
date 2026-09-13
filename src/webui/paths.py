@@ -50,6 +50,9 @@ ACCOUNT_PATH = os.path.join(ROOT, "config", "账户配置.json")
 WATCHLIST_PATH = os.path.join(ROOT, "data", "user", "自选股.md")
 
 
+TRACKLIST_PATH = os.path.join(ROOT, "data", "user", "跟踪标的.md")
+
+
 MODELS_PATH = os.path.join(ROOT, "config", "模型配置.json")
 
 
@@ -73,6 +76,7 @@ TRASH_DIR = os.path.join(AI_DIR, ".trash")
 
 PICK_DIR = os.path.join(AI_DIR, "pick")
 PLANCHECK_DIR = os.path.join(AI_DIR, "plancheck")     # 报告实盘复核的模型点评产物
+TRACK_DIR = os.path.join(AI_DIR, "track")             # 标的跟踪：每日计划产物 + 执行记录
 
 
 PHASES = ("prep", "live", "post", "all")

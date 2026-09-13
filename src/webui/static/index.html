@@ -18,6 +18,7 @@
     </div>
     <nav class="nav" id="nav">
       <button class="nav-item active" data-view="console"><i>⌂</i>总控台</button>
+      <button class="nav-item" data-view="track"><i>◎</i>标的跟踪<span class="nav-badge" id="nav-track-badge" hidden></span></button>
       <button class="nav-item" data-view="run"><i>▶</i>运行研判</button>
       <button class="nav-item" data-view="report"><i>▤</i>报告</button>
       <button class="nav-item" data-view="history"><i>◷</i>历史与复盘</button>
@@ -112,6 +113,73 @@
                 <div class="mini-card"><div class="sec-title">数据源健康</div>
                   <div class="muted">功能待补</div></div>
               </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 标的跟踪 ================= -->
+      <section class="view" id="view-track">
+        <div class="card" id="track-nudge" hidden>
+          <div class="card-b row">
+            <span id="track-nudge-text"></span>
+            <div class="spacer"></div>
+            <span class="muted" id="track-nudge-ctl"></span>
+            <button class="btn primary" id="btn-track-nudge">一键生成</button>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-h"><span>跟踪清单</span><span class="muted" id="track-path"></span>
+            <span class="muted" id="track-day"></span>
+            <div class="spacer"></div>
+            <span class="muted" id="track-refresh-note"></span>
+            <button class="btn ghost" id="btn-track-import">从自选股导入</button>
+            <button class="btn ghost" id="btn-track-quotes">刷新实盘价</button></div>
+          <div class="card-b">
+            <div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
+              <div class="field" style="margin:0;flex:0 0 150px">
+                <label>证券代码</label><input id="track-code" placeholder="如 600967" /></div>
+              <div class="field" style="margin:0;flex:1 1 150px">
+                <label>名称 <span class="muted">可选</span></label><input id="track-name" /></div>
+              <div class="field" style="margin:0;flex:1 1 150px">
+                <label>备注 <span class="muted">可选</span></label><input id="track-note" /></div>
+              <button class="btn primary" id="btn-track-add">加入跟踪</button>
+              <button class="btn" id="btn-track-generate">生成选中标的的计划</button>
+            </div>
+            <div class="err" id="track-msg"></div>
+          </div>
+          <div class="card-b table-wrap"><table class="tbl" id="track-table"></table></div>
+        </div>
+
+        <div class="grid-run">
+          <div class="card">
+            <div class="card-h"><span>生成每日计划</span>
+              <span class="muted">每只标的 1 次模型调用</span>
+              <div class="spacer"></div>
+              <select id="track-profile" class="inline-select"></select>
+              <button class="btn ghost" id="btn-track-advanced">高级选项</button>
+              <button class="btn danger ghost" id="btn-track-stop" hidden>中断</button></div>
+            <div class="card-b">
+              <div class="adv" id="track-adv" hidden>
+                <label class="sw"><input type="checkbox" id="track-review" /> 复核档（多一次模型调用，与报告页同质量）</label>
+                <div class="field" style="max-width:220px"><label>事实包字符上限</label>
+                  <input id="track-maxchars" type="number" /></div>
+                <div class="muted">账户 / 上一份计划 / 执行记录永不裁剪；超上限先砍板块、再砍大盘、最后砍个股形态。</div>
+              </div>
+              <div class="run-line">
+                <span class="chip" id="track-status">待运行</span>
+                <code class="cmd" id="track-cmd">POST /api/jobs {kind:"track"}</code>
+              </div>
+              <pre class="console" id="track-console"><span class="muted">等待开始 …</span></pre>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-h"><span>标的详情</span><span class="muted" id="track-detail-head"></span>
+              <div class="spacer"></div>
+              <button class="btn ghost" id="btn-track-gen-one" hidden>生成这只</button></div>
+            <div class="card-b" id="track-detail">
+              <div class="muted">在清单里点「详情」看某只标的的计划与执行记录。</div>
             </div>
           </div>
         </div>

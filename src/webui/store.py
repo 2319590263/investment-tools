@@ -4,7 +4,7 @@
 import json
 import os
 
-from .paths import ACCOUNT_PATH, MODELS_PATH, POOL_PATH, WATCHLIST_PATH, aiplan, atomic_write, num, read_bytes, read_text, rel
+from .paths import ACCOUNT_PATH, MODELS_PATH, POOL_PATH, TRACKLIST_PATH, WATCHLIST_PATH, aiplan, atomic_write, num, read_bytes, read_text, rel
 from .sources import stock3d_snapshot
 
 
@@ -57,11 +57,15 @@ def load_account_bundle():
 WATCHLIST_HEADER = "| 证券代码 | 证券名称 | 备注 |\n|---|---|---|\n"
 
 
-def load_watchlist():
-    """返回 (是否新建, 条目列表)。条目：{代码, 名称, 备注, 现价, 涨跌幅_pct, 在缓存}"""
-    if not os.path.exists(WATCHLIST_PATH):
-        atomic_write(WATCHLIST_PATH, WATCHLIST_HEADER, newline="\n")
-    _hdr, rows = aiplan.parse_pool_rows(WATCHLIST_PATH)
+def _pool_list(path):
+    """读「代码 / 名称 / 备注」三列清单（自选股与跟踪标的是同一种文件格式）。
+
+    条目：{代码, 名称, 备注, 现价, 涨跌幅_pct, 在缓存}；名称与价格取自 stock3d 快照，
+    只是显示用的缓存值，不写回文件。
+    """
+    if not os.path.exists(path):
+        atomic_write(path, WATCHLIST_HEADER, newline="\n")
+    _hdr, rows = aiplan.parse_pool_rows(path)
     s3_path, s3doc, cached = stock3d_snapshot()
     snap = {}
     for sym in (s3doc or {}).get("symbols") or []:
@@ -87,41 +91,93 @@ def load_watchlist():
     return out
 
 
-def save_watchlist(items):
+def _save_pool_list(path, items):
     """按统一表格格式整份写回自选股。"""
     lines = ["| 证券代码 | 证券名称 | 备注 |", "|---|---|---|"]
     for it in items:
         lines.append("| %s | %s | %s |" % (it.get("代码", ""), it.get("名称", ""), it.get("备注", "")))
-    atomic_write(WATCHLIST_PATH, "\n".join(lines) + "\n", newline="\n")
+    atomic_write(path, "\n".join(lines) + "\n", newline="\n")
     return items
 
 
-def watchlist_add(code, name="", note=""):
+def load_watchlist():
+    """自选股条目（文件不存在时按标准表头建一个空文件）。"""
+    return _pool_list(WATCHLIST_PATH)
+
+
+def save_watchlist(items):
+    return _save_pool_list(WATCHLIST_PATH, items)
+
+
+def load_tracklist():
+    """标的跟踪清单条目（与自选股同格式，互不影响）。"""
+    return _pool_list(TRACKLIST_PATH)
+
+
+def save_tracklist(items):
+    return _save_pool_list(TRACKLIST_PATH, items)
+
+
+def _pool_add(path, code, name="", note=""):
     c6 = aiplan.code6(code or "")
     if not c6:
         return None, "请填 6 位证券代码"
-    items = load_watchlist()
+    items = _pool_list(path)
     for it in items:
         if it["代码"] == c6:
             if name and not it["名称"]:
                 it["名称"] = name
             if note:
                 it["备注"] = note
-            save_watchlist(items)
+            _save_pool_list(path, items)
             return items, None
     items.append({"代码": c6, "名称": (name or "").strip(), "备注": (note or "").strip()})
-    save_watchlist(items)
+    _save_pool_list(path, items)
     return items, None
 
 
-def watchlist_remove(code):
+def _pool_remove(path, code, label):
     c6 = aiplan.code6(code or "")
-    items = load_watchlist()
+    items = _pool_list(path)
     keep = [it for it in items if it["代码"] != c6]
     if len(keep) == len(items):
-        return None, "自选股里没有 %s" % (c6 or code)
-    save_watchlist(keep)
+        return None, "%s 里没有 %s" % (label, c6 or code)
+    _save_pool_list(path, keep)
     return keep, None
+
+
+def watchlist_add(code, name="", note=""):
+    return _pool_add(WATCHLIST_PATH, code, name, note)
+
+
+def watchlist_remove(code):
+    return _pool_remove(WATCHLIST_PATH, code, "自选股")
+
+
+def tracklist_add(code, name="", note=""):
+    return _pool_add(TRACKLIST_PATH, code, name, note)
+
+
+def tracklist_remove(code):
+    return _pool_remove(TRACKLIST_PATH, code, "跟踪清单")
+
+
+def tracklist_import_watchlist():
+    """把自选股里还没进跟踪清单的标的补进来。返回 (新增数量, 跟踪清单)。"""
+    if not os.path.exists(TRACKLIST_PATH):
+        atomic_write(TRACKLIST_PATH, WATCHLIST_HEADER, newline="\n")
+    items = _pool_list(TRACKLIST_PATH)
+    have = {it["代码"] for it in items}
+    added = 0
+    for it in _pool_list(WATCHLIST_PATH):
+        if it["代码"] in have:
+            continue
+        items.append({"代码": it["代码"], "名称": it.get("名称") or "", "备注": it.get("备注") or ""})
+        have.add(it["代码"])
+        added += 1
+    if added:
+        _save_pool_list(TRACKLIST_PATH, items)
+    return added, items
 
 
 def load_models_bundle():

@@ -15,17 +15,17 @@ import time
 from . import alerts as alerts_store
 from . import pickrank
 from . import quotes
+from . import track
 from .archive import list_reports
 from .paths import ROOT, WATCHLIST_PATH, aiplan, num, rel
 from .plancheck import is_noop, parse_range, plan_kind, session_of
+from .planlines import _LEVELS_CACHE, lots_text, report_levels
 from .store import load_holdings_bundle, load_watchlist
 
 TOL = 0.01                 # 与实盘复核一致的 1 个最小变动价位
 ALERT_MAX = 8              # 提醒条一次最多给几条
 REPORT_MAP_TTL = 60.0      # 「每只股票的最新报告」缓存
-LEVELS_CACHE_MAX = 200
 
-_LEVELS_CACHE = {}         # 报告路径 -> (mtime, levels)
 _REPORT_MAP = {"ts": 0.0, "map": {}}
 _ALERT_STATE = {}          # (代码, 类型) -> 已提醒过的价位
 _STATE_SEEDED = {"done": False}
@@ -33,18 +33,6 @@ _STATE_SEEDED = {"done": False}
 
 def _f(v):
     return "—" if v is None else "%.2f" % v
-
-
-def lots_text(shares):
-    """股数 → 手数文本（1 手 = 100 股）。空 / 0 / 负数返回空串。"""
-    n = num(shares)
-    if n is None or n <= 0:
-        return ""
-    n = int(n)
-    whole, rest = divmod(n, 100)
-    if rest == 0:
-        return "%d 手" % whole
-    return ("%d 手 %d 股" % (whole, rest)) if whole else ("%d 股" % rest)
 
 
 # ---------------------------------------------------------------------------
@@ -64,55 +52,6 @@ def newest_report_map(reports=None):
     if reports is None:
         _REPORT_MAP["ts"] = now
         _REPORT_MAP["map"] = out
-    return out
-
-
-def report_levels(path):
-    """报告里的计划线（买点 / 减仓 / 止损 / 目标 / 支撑 / 压力），按 mtime 缓存。"""
-    if not path:
-        return None
-    p = path if os.path.isabs(path) else os.path.join(ROOT, path)
-    p = os.path.abspath(p)
-    try:
-        mtime = os.path.getmtime(p)
-    except OSError:
-        return None
-    hit = _LEVELS_CACHE.get(p)
-    if hit and hit[0] == mtime:
-        return copy.deepcopy(hit[1])
-    doc = aiplan.read_json(p) or {}
-    plan = ((doc.get("研判") or {}).get("json") or {})
-    levels = plan.get("关键价位") or {}
-
-    def rows(key):
-        out = []
-        for x in (levels.get(key) or []):
-            v = num(x.get("价位")) if isinstance(x, dict) else num(x)
-            if v is not None:
-                out.append({"价位": v, "依据": (x.get("依据") or "") if isinstance(x, dict) else ""})
-        return out
-
-    buy = sell = None
-    for item in (plan.get("计划") or []):
-        act = item.get("动作")
-        if is_noop(act):
-            continue
-        rng = parse_range(item.get("价格区间"))
-        if not rng:
-            continue
-        node = {"动作": act, "下沿": rng[0], "上沿": rng[1], "股数": item.get("股数"),
-                "失效条件": item.get("失效条件")}
-        if plan_kind(act) == "买入" and buy is None:
-            buy = node
-        elif plan_kind(act) == "卖出" and sell is None:
-            sell = node
-    out = {"报告路径": rel(p), "方向": plan.get("方向"), "置信度": plan.get("置信度"),
-           "报告交易日": doc.get("trade_date"), "生成时间": doc.get("generated_at"),
-           "买点": buy, "减仓": sell, "止损": num(levels.get("止损价")),
-           "目标": rows("目标位"), "支撑": rows("支撑"), "压力": rows("压力")}
-    if len(_LEVELS_CACHE) > LEVELS_CACHE_MAX:
-        _LEVELS_CACHE.clear()
-    _LEVELS_CACHE[p] = (mtime, copy.deepcopy(out))
     return out
 
 
@@ -247,7 +186,10 @@ def build_overview(refresh=False):
         quote_map, qhints = quotes.fetch_quotes(codes, refresh=True)
         hints += qhints
     pickrank.apply_quotes(rank.get("行") or [], quote_map, refresh)
-    reports = list_reports()
+    # 计划线取「报告 ∪ 跟踪产物」里每只标的最新一份：日常用标的跟踪生成计划时，
+    # 总控台卡片与到价提醒要跟着跟踪计划走，而不是停在旧的手工报告上。
+    reports = list_reports() + track.merged_plan_items()
+    reports.sort(key=lambda x: x.get("mtime") or 0, reverse=True)
     by_code = newest_report_map(reports)
     held = {r.get("代码") for r in hold_rows}
     session = session_of()

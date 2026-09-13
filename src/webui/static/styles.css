@@ -580,3 +580,20 @@ table.tbl td.rk-ops { white-space: nowrap; }
 table.tbl td.rk-ops .btn { margin-left: 4px; }
 .rk-code { color: inherit; text-decoration: none; }
 #console-pick-more { margin-top: 6px; }
+
+/* ---- 标的跟踪 ---- */
+.nav-item { position: relative; }
+.nav-badge { margin-left: 6px; padding: 0 6px; border-radius: 999px; font-size: 11px;
+  background: var(--warn); color: #201a06; font-family: var(--mono); }
+#view-track .switch-note { margin-top: 4px; }
+#track-table td.wrap, #track-detail td.wrap { white-space: normal; }
+#track-detail { max-height: 640px; overflow: auto; }
+.tk-detail-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+.tk-sum { display: flex; gap: 18px; flex-wrap: wrap; margin: 10px 0 4px; }
+.tk-levels { display: flex; flex-direction: column; gap: 4px; font-family: var(--mono); font-size: 13px; }
+.tk-exec select.inline-select { min-width: 96px; }
+input.inline-input { background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+  border-radius: 8px; padding: 5px 8px; font-size: 13px; width: 100%; min-width: 70px;
+  font-family: var(--mono); }
+input.inline-input:focus { outline: none; border-color: var(--accent); }
+#track-table input[type="checkbox"] { cursor: pointer; }

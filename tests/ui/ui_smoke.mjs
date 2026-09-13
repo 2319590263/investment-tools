@@ -15,10 +15,12 @@ import { mkdirSync } from "node:fs";
 const PORT = process.argv[2] || process.env.AIPLAN_WEBUI_PORT || "8765";
 const BASE = `http://127.0.0.1:${PORT}`;
 
-const VIEWS = ["console", "run", "report", "history", "holdings", "watch", "pick", "models", "market"];
+const VIEWS = ["console", "track", "run", "report", "history", "holdings", "watch", "pick",
+               "models", "market"];
 // 每个视图必须渲染出的真实内容（空壳页面不算通过）
 const CONTENT = {
   console: "#console-body .kv",
+  track: "#track-table tbody tr",
   run: "#console",
   report: "#report-struct .card",
   history: "#hist-table tbody tr",
@@ -335,6 +337,44 @@ const multiModRows = await page.evaluate(() => Array.from(
   .filter(tr => tr.children[2] && tr.children[2].querySelectorAll(".chip").length > 1).length);
 console.log(`${multiModRows === 0 ? "PASS" : "FAIL"}  候选榜一票一模块（多模块行 ${multiModRows}）`);
 if (multiModRows !== 0) failed++;
+
+
+/* ---- 标的跟踪页：清单 + 生成控件 + 详情容器（全程不点「生成」，不打模型） ---- */
+await gotoView("track");
+for (const sel of ["#track-table", "#btn-track-generate", "#btn-track-add", "#btn-track-import",
+                   "#btn-track-quotes", "#track-console", "#track-detail", "#btn-track-advanced",
+                   "#nav-track-badge"]) {
+  const found = await page.locator(sel).count();
+  console.log(`${found > 0 ? "PASS" : "FAIL"}  跟踪页控件 ${sel}`);
+  if (!found) failed++;
+}
+await page.waitForFunction(() => {
+  const t = document.querySelector("#track-table");
+  return t && t.querySelector("tbody tr");
+}, null, { timeout: 20000 }).catch(() => {});
+const trackRows = await page.locator("#track-table tbody tr").count();
+const trackText = await page.locator("#track-table").innerText().catch(() => "");
+const trackOk = trackRows > 0 || /跟踪清单还是空的/.test(trackText);
+console.log(`${trackOk ? "PASS" : "FAIL"}  跟踪清单渲染（${trackRows} 行）`);
+if (!trackOk) failed++;
+await page.click("#btn-track-advanced");
+const advOpen = await page.locator("#track-adv").isVisible();
+console.log(`${advOpen ? "PASS" : "FAIL"}  高级选项可展开`);
+if (!advOpen) failed++;
+const maxChars = await page.inputValue("#track-maxchars");
+console.log(`${String(maxChars).length > 0 ? "PASS" : "FAIL"}  事实包字符上限有默认值（${maxChars}）`);
+if (!String(maxChars).length) failed++;
+const firstDetail = page.locator("#track-table a[data-detail]").first();
+if (await firstDetail.count()) {
+  await firstDetail.click();
+  await page.waitForSelector("#track-detail .tk-detail-head", { timeout: 15000 }).catch(() => {});
+  const detailText = await page.locator("#track-detail").innerText().catch(() => "");
+  const hasBlocks = /关键价位/.test(detailText) || /还没有计划产物/.test(detailText);
+  console.log(`${hasBlocks ? "PASS" : "FAIL"}  详情卡渲染（计划/关键价位或空态）`);
+  if (!hasBlocks) failed++;
+} else {
+  console.log("INFO  跟踪清单为空，跳过详情卡断言");
+}
 
 await browser.close();
 
