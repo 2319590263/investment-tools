@@ -122,6 +122,30 @@ class TestRows(unittest.TestCase):
         self.assertEqual(hit["现价"], 27.92)
         self.assertEqual(hit["价格来源"], "产物快照")
 
+    def test_same_stock_across_modules_is_merged(self):
+        d = doc()
+        d["参数"]["模块"] = ["短线", "中线"]
+        d["候选"]["中线"] = [
+            {"代码": "300563", "名称": "神宇股份", "来源板块": "半导体", "板块类型": "行业",
+             "机械分": 91.0, "评级": "偏强", "现价": 27.0, "涨跌幅_pct": 1.0, "所属行业": "半导体"},
+            {"代码": "600519", "名称": "贵州茅台", "来源板块": "半导体", "板块类型": "行业",
+             "机械分": 70.0, "评级": "中性", "现价": 1500.0, "涨跌幅_pct": 0.5, "所属行业": "半导体"},
+        ]
+        rows = rank.build_rows(d)
+        codes = [r["代码"] for r in rows]
+        self.assertEqual(len(codes), len(set(codes)), "同一只股票只占一行")
+        self.assertEqual(len(codes), 4)
+        hit = [r for r in rows if r["代码"] == "300563"][0]
+        self.assertEqual(hit["模块列表"], ["短线", "中线"])       # 固定顺序（短线→波段→中线→长线）
+        self.assertEqual(hit["模块数"], 2)
+        self.assertEqual(hit["推荐度"], 100.0)                    # 取该股在各模块里的最高推荐度
+        self.assertEqual(hit["模块"], "短线")                     # 主行 = 推荐度最高的那条
+
+    def test_facet_modules_always_four(self):
+        facets = rank.facet_modules(rank.build_rows(doc()))
+        self.assertEqual([f["名称"] for f in facets], ["短线", "波段", "中线", "长线"])
+        self.assertEqual([f["候选数"] for f in facets], [3, 0, 0, 0])
+
 
 class TestBuildRank(unittest.TestCase):
 
@@ -132,6 +156,7 @@ class TestBuildRank(unittest.TestCase):
         self.assertEqual(out["行"], [])
         self.assertIn("还没有荐股结果", out["提示"][0])
         self.assertEqual(out["筛选树"], {"行业": [], "概念": [], "未归类": []})
+        self.assertEqual([f["候选数"] for f in out["模块"]], [0, 0, 0, 0], "没产物也给全 4 个模块")
 
     def test_reads_latest_product(self):
         tmp = tempfile.mkdtemp(prefix="aiplan-rank-")
@@ -143,7 +168,8 @@ class TestBuildRank(unittest.TestCase):
         self.assertEqual(len(out["行"]), 3)
         self.assertEqual(out["产物"]["模块"], ["短线"])
         self.assertEqual(out["产物"]["交易日"], "2026-09-11")
-        self.assertIn("只覆盖「短线」模块", "".join(out["提示"]))
+        self.assertIn("只覆盖「短线」", "".join(out["提示"]))
+        self.assertIn("波段、中线、长线", "".join(out["提示"]))
 
 
 if __name__ == "__main__":

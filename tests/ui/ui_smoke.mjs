@@ -119,12 +119,18 @@ if (planText) {
 }
 
 /* ---- 总控台荐股榜：筛选控件 + 排行榜（没有产物时给空态） ---- */
-for (const sel of ["#console-pick", "#console-pick-mods", "#console-pick-l1",
-                   "#console-pick-theme", "#btn-pick-goto", "#btn-pick-reset"]) {
+for (const sel of ["#console-pick", "#console-pick-mods", "#btn-pick-goto"]) {
   const found = await page.locator(sel).count();
   console.log(`${found > 0 ? "PASS" : "FAIL"}  荐股榜控件 ${sel}`);
   if (!found) failed++;
 }
+const facetMods = await page.$$eval("#console-pick-mods button", els => els.map(e => e.dataset.rkMod));
+const fourMods = facetMods.join("/") === "短线/波段/中线/长线";
+console.log(`${fourMods ? "PASS" : "FAIL"}  模块始终给全 4 个（${facetMods.join("/")}）`);
+if (!fourMods) failed++;
+const noExtraFilter = await page.locator("#console-pick-l1, #console-pick-theme, #btn-pick-reset").count();
+console.log(`${noExtraFilter === 0 ? "PASS" : "FAIL"}  榜单不再有行业/概念筛选（多余控件 ${noExtraFilter} 个）`);
+if (noExtraFilter !== 0) failed++;
 await page.waitForFunction(() => {
   const box = document.querySelector("#console-pick");
   return box && (box.querySelector("table.tbl tbody tr") || /还没有荐股结果/.test(box.textContent));
@@ -140,18 +146,24 @@ if (rkRows > 0) {
   const hasPlan = /买点/.test(planLine) && /止损/.test(planLine) && /止盈点/.test(planLine) && !/~/.test(planLine);
   console.log(`${hasPlan ? "PASS" : "FAIL"}  首推行带买点/止损/止盈点且无区间（${planLine.slice(0, 40)}…）`);
   if (!hasPlan) failed++;
-  const optionText = await page.locator("#console-pick-l1 option").nth(1).getAttribute("value");
-  if (optionText) {
-    await page.selectOption("#console-pick-l1", optionText);
+  const codes = await page.$$eval("#console-pick table.tbl tbody tr:not(.rk-plan) .rk-code",
+    els => els.map(e => e.dataset.code));
+  const dedupOk = codes.length > 0 && new Set(codes).size === codes.length;
+  console.log(`${dedupOk ? "PASS" : "FAIL"}  榜单按股票去重（${codes.length} 行 / ${new Set(codes).size} 只）`);
+  if (!dedupOk) failed++;
+  const onMods = await page.$$eval("#console-pick-mods button.on", els => els.map(e => e.dataset.rkMod));
+  const disabledMods = await page.$$eval("#console-pick-mods button[disabled]", els => els.map(e => e.dataset.rkMod));
+  if (disabledMods.length) {
+    await page.click(`#console-pick-mods button[data-rk-mod="${onMods[0]}"]`);
     await page.waitForTimeout(200);
     const filtered = await page.locator("#console-pick-more").innerText();
     const okFilter = /筛选后 \d+ 只 \/ 共 \d+ 只/.test(filtered || "");
-    console.log(`${okFilter ? "PASS" : "FAIL"}  行业筛选生效（${filtered}）`);
+    console.log(`${okFilter ? "PASS" : "FAIL"}  模块筛选生效（${filtered}）`);
     if (!okFilter) failed++;
-    await page.click("#btn-pick-reset");
+    await page.click(`#console-pick-mods button[data-rk-mod="${onMods[0]}"]`);
     await page.waitForTimeout(150);
   } else {
-    console.log("INFO  榜单没有可筛的行业，跳过筛选联动断言");
+    console.log("INFO  产物覆盖 4 个模块，跳过「模块置灰」断言");
   }
   await page.screenshot({ path: "build/ui-smoke-console-pick.png" });
 }

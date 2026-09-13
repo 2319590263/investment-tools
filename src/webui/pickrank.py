@@ -10,7 +10,7 @@ import time
 
 from .archive import latest_pick_path
 from .paths import aiplan, num, rel
-from .pick import pick_concept_theme
+from .pick import PICK_MODULES, pick_concept_theme
 
 RANK_BONUS = (8.0, 6.0, 4.0)        # 模型首推第 1/2/3 名的推荐度加成
 RANK_CAP = 100.0                    # 推荐度上限
@@ -80,7 +80,10 @@ def sort_key(row):
 
 
 def build_rows(doc, held=None, watch=None):
-    """产物 → 榜单行（已按推荐度降序）。首推价位是模型给的文本，原样透传。"""
+    """产物 → 榜单行（同一只股票跨模块合并成一行，按推荐度降序）。
+
+    首推价位是模型给的文本，原样透传；合并时取推荐度最高的那条作为主行。
+    """
     l1_map = board_l1_map(doc)
     firsts = first_picks(doc)
     held, watch = set(held or ()), set(watch or ())
@@ -117,8 +120,37 @@ def build_rows(doc, held=None, watch=None):
                 "首推理由": (pick or {}).get("理由"), "首推评级": (pick or {}).get("评级"),
                 "是否持仓": code in held, "是否自选": code in watch,
             })
+    rows = merge_by_code(rows)
     rows.sort(key=sort_key)
     return rows
+
+
+def merge_by_code(rows):
+    """同一只股票在多个模块上榜 → 合成一行：推荐度最高的当主行，模块收进「模块列表」。"""
+    best, modules = {}, {}
+    for row in rows:
+        code = row.get("代码")
+        modules.setdefault(code, {})[row.get("模块")] = True
+        cur = best.get(code)
+        if cur is None or sort_key(row) < sort_key(cur):
+            best[code] = row
+    out = []
+    for code, row in best.items():
+        names = [name for name, _ in PICK_MODULES if modules.get(code, {}).get(name)]
+        merged = dict(row)
+        merged["模块列表"] = names or [row.get("模块")]
+        merged["模块数"] = len(merged["模块列表"])
+        out.append(merged)
+    return out
+
+
+def facet_modules(rows):
+    """模块筛选：**始终**给全部 4 个模块，产物里没有候选的标 0（前端置灰）。"""
+    counts = {}
+    for row in rows:
+        for name in row.get("模块列表") or [row.get("模块")]:
+            counts[name] = counts.get(name, 0) + 1
+    return [{"名称": name, "候选数": counts.get(name, 0)} for name, _ in PICK_MODULES]
 
 
 def facet_tree(rows):
@@ -168,6 +200,7 @@ def apply_quotes(rows, quote_map, refresh=False):
 def empty_rank(note=None):
     return {"产物": None, "口径": RANK_NOTE, "行": [],
             "筛选树": {"行业": [], "概念": [], "未归类": []},
+            "模块": facet_modules([]),
             "提示": [note or "还没有荐股结果（data/ai/pick/）：去「荐股」页选板块跑一次"]}
 
 
@@ -188,9 +221,10 @@ def build_rank(held=None, watch=None):
         tips.append("产物是 %d 天前的（%s）：价格会实时刷新，但结论与价位仍是那天的"
                     % (days, time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime))))
     modules = ((doc.get("参数") or {}).get("模块")) or []
-    if len(modules) == 1:
-        tips.append("本次产物只覆盖「%s」模块：在「荐股」页多选模块重跑，榜单就能按 4 个模块筛"
-                    % modules[0])
+    missing = [name for name, _ in PICK_MODULES if name not in modules]
+    if missing:
+        tips.append("本次产物只覆盖「%s」，%s没有候选：去「荐股」页把这 4 个模块都勾上重跑就能看全"
+                    % ("/".join(modules) or "—", "、".join(missing)))
     md = os.path.splitext(path)[0] + ".md"
     return {
         "产物": {
@@ -204,4 +238,5 @@ def build_rank(held=None, watch=None):
             "天数": days,
         },
         "口径": RANK_NOTE, "行": rows, "筛选树": facet_tree(rows), "提示": tips,
+        "模块": facet_modules(rows),
     }

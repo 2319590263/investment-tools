@@ -154,12 +154,16 @@ class TestApiSmoke(unittest.TestCase):
         status, body = self.server.get("/api/overview")
         self.assertEqual(status, 200, body)
         pk = body["荐股"]
-        for key in ("产物", "口径", "行", "筛选树", "提示"):
+        for key in ("产物", "口径", "行", "模块", "筛选树", "提示"):
             self.assertIn(key, pk)
         self.assertIsInstance(pk["行"], list)
         for key in ("行业", "概念", "未归类"):
             self.assertIn(key, pk["筛选树"])
         self.assertIn("推荐度", pk["口径"])
+        self.assertEqual([m["名称"] for m in pk["模块"]], ["短线", "波段", "中线", "长线"],
+                         "模块筛选必须始终给全 4 个")
+        codes = [r["代码"] for r in pk["行"]]
+        self.assertEqual(len(codes), len(set(codes)), "榜单必须按股票去重合并")
         for row in pk["行"]:
             for field in ("代码", "名称", "模块", "一级行业", "推荐度", "机械分",
                           "价格来源", "现价", "是否持仓", "是否自选"):
