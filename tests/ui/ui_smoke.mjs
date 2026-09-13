@@ -151,13 +151,49 @@ if (rkRows > 0) {
   const dedupOk = codes.length > 0 && new Set(codes).size === codes.length;
   console.log(`${dedupOk ? "PASS" : "FAIL"}  榜单按股票去重（${codes.length} 行 / ${new Set(codes).size} 只）`);
   if (!dedupOk) failed++;
+  const capped = codes.length <= 30 && await page.locator("#console-pick .rk-more").count() === 0;
+  console.log(`${capped ? "PASS" : "FAIL"}  总榜固定 30 只、没有「显示全部」（${codes.length} 行）`);
+  if (!capped) failed++;
+  /* 榜单「自选」按钮：加完上方自选股卡区要立刻出现这只。
+     会短暂写 data/user/自选股.md（备注“荐股榜”），无论成败都在 finally 里删回。 */
+  const pickTarget = await page.evaluate(() => {
+    const rows = Array.from(document.querySelectorAll("#console-pick table.tbl tbody tr:not(.rk-plan)"));
+    for (const tr of rows) {
+      const chips = Array.from(tr.querySelectorAll(".chip")).map(c => c.textContent.trim());
+      if (chips.indexOf("自选") >= 0) continue;
+      const a = tr.querySelector(".rk-code"), btn = tr.querySelector("[data-rk-watch]");
+      if (a && btn) return a.dataset.code;
+    }
+    return null;
+  });
+  if (pickTarget) {
+    const beforeCards = await page.locator("#console-watch .stock-card").count();
+    try {
+      await page.click(`#console-pick [data-rk-watch="${pickTarget}"]`);
+      await page.waitForSelector(`#console-watch .stock-card[data-code="${pickTarget}"]`, { timeout: 15000 });
+      const afterCards = await page.locator("#console-watch .stock-card").count();
+      const okWatch = afterCards === beforeCards + 1;
+      console.log(`${okWatch ? "PASS" : "FAIL"}  榜单加自选后上方卡区立刻出现（${beforeCards} -> ${afterCards}）`);
+      if (!okWatch) failed++;
+    } catch (e) {
+      console.log("FAIL  榜单加自选后上方卡区没更新：" + String(e).slice(0, 80));
+      failed++;
+    } finally {
+      await page.evaluate(async (code) => {
+        await fetch("/api/watchlist/remove", { method: "POST",
+          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
+      }, pickTarget);
+    }
+  } else {
+    console.log("INFO  榜单前 30 行都已在自选里，跳过「加自选刷新卡区」断言");
+  }
   const onMods = await page.$$eval("#console-pick-mods button.on", els => els.map(e => e.dataset.rkMod));
   const disabledMods = await page.$$eval("#console-pick-mods button[disabled]", els => els.map(e => e.dataset.rkMod));
   if (disabledMods.length) {
     await page.click(`#console-pick-mods button[data-rk-mod="${onMods[0]}"]`);
     await page.waitForTimeout(200);
     const filtered = await page.locator("#console-pick-more").innerText();
-    const okFilter = /筛选后 \d+ 只 \/ 共 \d+ 只/.test(filtered || "");
+    const okFilter = /榜单前 \d+ 只/.test(filtered || "");
     console.log(`${okFilter ? "PASS" : "FAIL"}  模块筛选生效（${filtered}）`);
     if (!okFilter) failed++;
     await page.click(`#console-pick-mods button[data-rk-mod="${onMods[0]}"]`);

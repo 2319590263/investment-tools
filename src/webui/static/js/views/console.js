@@ -18,6 +18,7 @@ let queue = [];                            // 服务端消息队列（data/ai/al
 let readAt = 0;
 let poller = null;
 let hasOverview = false;
+let lastLive = false;                      // 上一次总览是否取的是实时价（加自选后按同口径刷新）
 
 function ago(ts) {
   const n = Number(ts);
@@ -227,6 +228,7 @@ export function renderOverview(d) {
   hasOverview = true;
   const sess = d["时段"] || {};
   const rf = d["刷新"] || {};
+  lastLive = rf["模式"] === "实时";
   const sum = d["汇总"] || {};
   const holdList = d["持仓"] || [];
   const watchList = d["自选"] || [];
@@ -290,9 +292,9 @@ export function renderOverview(d) {
    排名在前端按模块筛选后重算（服务端已按推荐度降序，筛选不改变相对顺序）。
    ========================================================================= */
 
-const PICK_TOP = 30;                 // 默认只列前 N 行，其余点「显示全部」
+const PICK_TOP = 30;                 // 总榜固定长度：短/波/中/长合并后只留推荐度最高的 30 只
 const RANK_PLACE = ["①", "②", "③"];
-const pickUI = { data: null, mods: new Set(), showAll: false };
+const pickUI = { data: null, mods: new Set() };
 
 function pickModuleRows(row) {
   return row["模块列表"] || (row["模块"] ? [row["模块"]] : []);
@@ -377,6 +379,8 @@ function bindPickRank(root) {
         State.state["自选股"] = res["自选股"] || State.state["自选股"];
         State.state["代码候选"] = res["代码候选"] || State.state["代码候选"];
       }
+      // 加完立刻重取一次总览：上方「自选股」卡区要当场出现这只（口径与上次一致）
+      await loadConsole(lastLive);
     } catch (e) { toast(e.message, "bad"); }
   }));
   root.querySelectorAll("[data-rk-run]").forEach(b =>
@@ -408,24 +412,16 @@ function renderPickTable() {
     if (more) more.textContent = "筛选后 0 只 / 共 " + total + " 只";
     return;
   }
-  const show = pickUI.showAll ? rows : rows.slice(0, PICK_TOP);
+  const show = rows.slice(0, PICK_TOP);
   box.innerHTML = '<div class="table-wrap"><table class="tbl"><thead><tr>' +
     "<th>#</th><th>标的</th><th>模块</th><th>来源板块</th>" +
     '<th class="num">现价</th><th class="num">涨跌幅</th><th class="num">机械分</th>' +
     '<th class="num">推荐度</th><th>机械评级</th><th></th></tr></thead><tbody>' +
     show.map((r, i) => pickRankRow(r, i)).join("") + "</tbody></table></div>";
   if (more) {
-    more.textContent = "筛选后 " + rows.length + " 只 / 共 " + total + " 只" +
-      (rows.length > PICK_TOP
-        ? (pickUI.showAll ? " · 已显示全部" : " · 已显示前 " + PICK_TOP + " 行") : "");
-    if (rows.length > PICK_TOP) {
-      more.innerHTML += ' <button class="btn sm ghost rk-more">' +
-        (pickUI.showAll ? "只看前 " + PICK_TOP + " 行" : "显示全部 " + rows.length + " 行") + "</button>";
-      more.querySelector(".rk-more").addEventListener("click", () => {
-        pickUI.showAll = !pickUI.showAll;
-        renderPickTable();
-      });
-    }
+    more.textContent = "榜单前 " + show.length + " 只" + (total > PICK_TOP
+      ? "（短/波/中/长合并候选 " + total + " 只" +
+        (rows.length === total ? "" : "，当前筛选 " + rows.length + " 只") + "）" : "");
   }
   bindPickRank(box);
 }
@@ -452,7 +448,7 @@ export function renderPickRank(rank) {
     if (box) box.innerHTML = '<div class="empty">还没有荐股结果。点右上「一键去跑荐股」跳荐股页选板块跑一次（1 次模型调用）。</div>';
   } else {
     if (sum) {
-      sum.textContent = rows.length + " 只（已按股票合并）" +
+      sum.textContent = Math.min(rows.length, PICK_TOP) + " 只（短/波/中/长合并）" +
         (prod ? " · 产物 " + (prod["产物时间"] || prod["生成时间"] || "") : "");
     }
     if (src) {
