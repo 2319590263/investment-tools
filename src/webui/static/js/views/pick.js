@@ -4,6 +4,7 @@ import { State, registerView, showView, viewApi } from "../core/app.js";
 import { $, $$, badge, chip, dirColor, esc, fmt, fmtPct, has, num, pctClass, toast } from "../core/util.js";
 import { drawKline } from "../ui/kline.js";
 import { closeModal, confirmModal, openModal } from "../ui/modal.js";
+import { pickCell, pickCandidateCard, pickGradeChip, pickModuleCards, pickPrices } from "../ui/pickcards.js";
 import { PICK_MODULE_CYCLE, pickApplyModules, pickLoadModules, pickModules,
          pickSaveModules, pickPrefill } from "../ui/pickfilter.js";
 
@@ -448,18 +449,6 @@ export async function loadPick(path) {
   renderPick(res);
 }
 
-export function pickCell(v, d, pct) {
-  const n = num(v);
-  if (n === null) return '<td class="num muted">—</td>';
-  return '<td class="num' + (pct ? " " + pctClass(n) : "") + '">' +
-    (pct ? fmtPct(n, d) : fmt(n, d)) + "</td>";
-}
-
-export function pickGradeChip(g) {
-  const cls = g === "强" ? "ok" : (g === "偏强" ? "accent" : (g === "弱" ? "bad" : "flat"));
-  return badge(g || "—", cls);
-}
-
 export function pickMatrix(p) {
   const par = p["参数"] || {};
   const boards = p["板块"] || {};
@@ -531,72 +520,6 @@ export function pickBoardCards(p) {
   return html;
 }
 
-export function pickPrices(f) {
-  if (!f || !f["代码"]) return '<span class="muted">—</span>';
-  const buy = f["关注买点"] || {}, stop = f["止损"] || {}, tg = f["目标位"] || [];
-  let out = "";
-  if (buy["价位"]) out += "<div><b>买点</b> " + esc(buy["价位"]) +
-    '<div class="hint">' + esc(buy["依据"] || "") + "</div></div>";
-  if (stop["价位"]) out += "<div><b>止损</b> " + esc(stop["价位"]) +
-    '<div class="hint">' + esc(stop["依据"] || "") + "</div></div>";
-  tg.forEach(t => {
-    if (t["价位"]) out += "<div><b>目标</b> " + esc(t["价位"]) +
-      '<div class="hint">' + esc(t["依据"] || "") + "</div></div>";
-  });
-  if (f["风险"]) out += '<div class="hint">风险：' + esc(f["风险"]) + "</div>";
-  return out || '<span class="muted">—</span>';
-}
-
-export function pickModuleCards(p) {
-  const par = p["参数"] || {};
-  const modelMods = {};
-  (p["模块"] || []).forEach(m => { modelMods[String(m["模块"] || "")] = m; });
-  const mods = par["模块"] || Object.keys(p["候选"] || {});
-  let html = "";
-  mods.forEach(m => {
-    const mm = modelMods[m] || {};
-    const first = {};
-    (mm["首推"] || []).forEach(c => { first[String(c["代码"] || "")] = c; });
-    const rows = (p["候选"] || {})[m] || [];
-    html += '<div class="card" id="pick-mod-' + esc(m) + '"><div class="card-h"><span>' +
-      esc(m) + " · 候选</span>" + chip(PICK_MODULE_CYCLE[m] || "", "flat") +
-      (mm["评分"] == null ? "" : chip("模型评分 " + mm["评分"], "accent")) +
-      '<div class="spacer"></div><span class="muted">机械分前 ' + rows.length + " 只</span></div>";
-    if (mm["逻辑"] || mm["介入节奏"] || mm["失效条件"]) {
-      html += '<div class="card-b note">' +
-        (mm["逻辑"] ? "<div><b>逻辑</b> " + esc(mm["逻辑"]) + "</div>" : "") +
-        (mm["介入节奏"] ? "<div><b>介入节奏</b> " + esc(mm["介入节奏"]) + "</div>" : "") +
-        (mm["失效条件"] ? "<div><b>失效条件</b> " + esc(mm["失效条件"]) + "</div>" : "") +
-        "</div>";
-    }
-    html += '<div class="card-b table-wrap"><table class="tbl"><thead><tr>' +
-      "<th>代码</th><th>名称</th><th>来源板块</th><th class='num'>现价</th><th class='num'>涨跌幅</th>" +
-      "<th class='num'>5日</th><th class='num'>20日</th><th class='num'>换手</th><th class='num'>量比</th>" +
-      "<th class='num'>主力净流入(亿)</th><th class='num'>机械分</th><th>模型结论</th>" +
-      "<th>精确价位（含依据）</th><th>操作</th></tr></thead><tbody>";
-    rows.forEach(r => {
-      const f = first[String(r["代码"])] || {};
-      html += "<tr><td><b>" + esc(r["代码"]) + "</b></td><td>" + esc(r["名称"]) + "</td>" +
-        '<td class="muted">' + esc(r["来源板块"] || "") + "</td>" +
-        pickCell(r["现价"], 2, false) + pickCell(r["涨跌幅_pct"], 2, true) +
-        pickCell(r["5日_pct"], 2, true) + pickCell(r["20日_pct"], 2, true) +
-        pickCell(r["换手率_pct"], 2, false) + pickCell(r["量比"], 2, false) +
-        pickCell(r["主力净流入_亿"], 3, false) + pickCell(r["机械分"], 1, false) +
-        "<td>" + (f["评级"] ? badge(f["评级"],
-          f["评级"] === "关注" ? "ok" : (f["评级"] === "回避" ? "bad" : "flat"))
-          : '<span class="muted">—</span>') +
-        (f["理由"] ? '<div class="hint wrap">' + esc(f["理由"]) + "</div>" : "") + "</td>" +
-        '<td class="wrap">' + pickPrices(f) + "</td>" +
-        '<td><a href="#" data-pick-run="' + esc(r["代码"]) + '">研判</a> ' +
-        '<a href="#" data-pick-kline="' + esc(r["代码"]) + '">K线</a> ' +
-        '<button class="btn sm" data-pick-watch="' + esc(r["代码"]) + '" data-pick-watch-name="' +
-        esc(r["名称"] || "") + '">加入自选</button></td></tr>';
-    });
-    html += "</tbody></table></div></div>";
-  });
-  return html;
-}
-
 export function renderPick(bundle) {
   const box = $("#pick-result");
   if (!box) return;
@@ -623,6 +546,7 @@ export function renderPick(bundle) {
     '<div class="hint">' + chip("生成 " + (p["生成时间"] || "—")) +
     chip("交易日 " + (p["交易日"] || "—")) +
     chip("候选池 " + (p["候选池数量"] || 0) + " 只") +
+    chip("合并候选 " + (p["合并候选数"] == null ? "—" : p["合并候选数"]) + " 只（四模块合计）") +
     chip("每板块 " + (par["每板块候选"] == null ? "—" : par["每板块候选"]) +
          " 只 ｜ 上限 " + (par["候选上限"] == null ? "—" : par["候选上限"])) +
     chip("模型 " + (cfg["model"] || "未点评"), cfg["model"] ? "" : "warn") +
@@ -642,7 +566,7 @@ export function renderPick(bundle) {
     html += '<div class="card"><div class="card-b"><div class="err">[WARN] 本次没有模型点评：' +
       esc(model["error"]) + "（机械榜仍然有效；改好 Key/网络后可重跑）</div></div></div>";
   }
-  html += pickMatrix(p) + pickBoardCards(p) + pickModuleCards(p);
+  html += pickMatrix(p) + pickCandidateCard(p) + pickBoardCards(p) + pickModuleCards(p);
   const deg = (p["降级"] || []).concat(p["降级与不确定性"] || []);
   if (deg.length) {
     html += '<div class="card"><div class="card-h"><span>数据依赖与降级</span>' +
@@ -777,6 +701,9 @@ export async function showPickHistory() {
       }, "确认删除");
   }));
 }
+
+export { pickCell, pickGradeChip, pickPrices };
+
 
 export function initPickView() {
   pickLoadModules();

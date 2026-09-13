@@ -9,7 +9,7 @@ import time
 
 from .archive import save_pick
 from .paths import MODELS_PATH, PAN_DIR, aiplan, atomic_write, pan, rel
-from .pick import PICK_BOARD_FIELDS, PICK_BOARD_TYPES, PICK_CACHE_DIR, PICK_CACHE_TTL, PICK_CAND_SCAN, PICK_CONCEPT_THEMES, PICK_L1_INDUSTRIES, PICK_MAX_CANDIDATES, PICK_MAX_CONCEPTS, PICK_MEM_TTL, PICK_PAGE_TOP, PICK_PER_BOARD, PICK_PROMPT, PICK_STOCK_FIELDS, PICK_SYSTEM, PICK_THEME_OTHER, pick_board_view, pick_concept_theme, pick_factpack, pick_filter, pick_markdown, pick_pct, pick_score_boards, pick_score_stocks, pick_stock_view, pick_wsum
+from .pick import PICK_BOARD_FIELDS, PICK_BOARD_TYPES, PICK_CACHE_DIR, PICK_CACHE_TTL, PICK_CAND_SCAN, PICK_CONCEPT_THEMES, PICK_L1_INDUSTRIES, PICK_MAX_CANDIDATES, PICK_MAX_CONCEPTS, PICK_MEM_TTL, PICK_PAGE_TOP, PICK_PER_BOARD, PICK_PROMPT, PICK_STOCK_FIELDS, PICK_SYSTEM, PICK_THEME_OTHER, pick_board_view, pick_concept_theme, pick_factpack, pick_filter, pick_markdown, pick_pct, pick_score_boards, pick_score_stocks, pick_stock_view, pick_top_codes, pick_wsum
 from .sources import newest_file, pan_files
 
 
@@ -511,13 +511,18 @@ def run_pick(log, ctl, opts):
             % (len(pool), "，".join("%s %d 只" % (k, v) for k, v in stat.items()) or "无"))
     degrade = pick_cap_degrade(degrade)
     cands = {}
+    scored = {}
     for m in opts["modules"]:
         rows = pick_score_stocks([dict(r) for r in pool], m)
         rows.sort(key=lambda r: (r["机械分"] if r["机械分"] is not None else -1.0), reverse=True)
-        cands[m] = [pick_stock_view(r, m) for r in rows[:PICK_PAGE_TOP]]
-        log(("[OK] 模块 %s：候选 %d 只，机械分最高 %s"
-             % (m, len(rows), rows[0]["机械分"] if rows else "—")) if rows
-            else "[WARN] 模块 %s：没有候选（见降级清单）" % m)
+        scored[m] = rows
+    picked = pick_top_codes(scored, opts["modules"])
+    for m in opts["modules"]:
+        rows = [r for r in scored[m] if r.get("代码") in picked]
+        cands[m] = [pick_stock_view(r, m) for r in rows]
+        log(("[OK] 模块 %s：入选 %d 只（合并榜共 %d 只，机械分最高 %s）"
+             % (m, len(rows), len(picked), rows[0]["机械分"] if rows else "—")) if rows
+            else "[WARN] 模块 %s：没有进入合并榜的候选（见降级清单）" % m)
     payload = {
         "tool": "aiplan-webui", "kind": "pick", "schema_version": "1",
         "生成时间": aiplan.iso_now(), "日期": aiplan.now_local().strftime("%Y%m%d"),
@@ -534,6 +539,7 @@ def run_pick(log, ctl, opts):
                  "候选上限": opts["max_candidates"], "事实包上限": opts["max_chars"],
                  "排除规则": exclude},
         "候选池数量": len(pool), "排除统计": stat,
+        "合并候选数": len(picked),          # 四个模块合并去重后的候选总数（= PICK_PAGE_TOP）
         "板块": {label: [pick_board_view(b) for b in all_boards
                         if b.get("类型") == label] for label in PICK_BOARD_TYPES},
         "候选": cands, "板块评估": [], "模块": [], "总评": {},

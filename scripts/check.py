@@ -45,7 +45,7 @@ PACKAGE_MODULES = ("__init__.py", "__main__.py", "paths.py", "sources.py", "stor
 JS_MODULES = ("main.js", "core/util.js", "core/api.js", "core/app.js", "core/poller.js",
               "core/mobile.js",
                   "ui/markdown.js", "ui/jsontree.js", "ui/modal.js", "ui/cards.js", "ui/kline.js",
-                  "ui/stockcard.js", "ui/planprices.js", "ui/pickfilter.js",
+                  "ui/stockcard.js", "ui/planprices.js", "ui/pickfilter.js", "ui/pickcards.js",
               "views/run.js", "views/report.js", "views/history.js", "views/holdings.js",
               "views/watch.js", "views/pick.js", "views/models.js", "views/market.js")
 VIEWS = ("console", "run", "report", "history", "holdings", "watch", "pick", "models", "market")

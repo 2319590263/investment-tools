@@ -127,7 +127,10 @@ PICK_MAX_CHARS = 40000
 PICK_MODEL_TOP = 12
 
 
-PICK_PAGE_TOP = 30
+PICK_PAGE_TOP = 30        # 榜单总长度：四个模块合并去重后只留 30 只（不是每模块 30 只）
+
+
+PICK_MODULE_MIN = 3       # 每个模块的保底候选数，保证模型能给每个模块首推
 
 
 PICK_MIN_PRICE = 2.0
@@ -401,6 +404,35 @@ def pick_concept_theme(name):
     return PICK_THEME_OTHER
 
 
+def pick_top_codes(scored, modules, total=PICK_PAGE_TOP, floor=PICK_MODULE_MIN):
+    """四个模块合并后只留 total 只：每模块先保底 floor 只，其余按全局最高机械分补足。
+
+    scored = {模块: [已按该模块机械分降序的候选行]}；返回选中的代码集合。
+    保底是为了让模型对每个模块都有可选标的（否则某模块可能在合并榜里一只都不剩）。
+    """
+    picked, best = [], {}
+    for m in modules:
+        for row in (scored.get(m) or [])[:floor]:
+            code = row.get("代码")
+            if code and code not in picked and len(picked) < total:
+                picked.append(code)
+    for m in modules:
+        for row in scored.get(m) or []:
+            code = row.get("代码")
+            if not code:
+                continue
+            score = row.get("机械分")
+            score = -1.0 if score is None else float(score)
+            if code not in best or score > best[code]:
+                best[code] = score
+    for code in sorted(best, key=lambda c: (-best[c], c)):
+        if len(picked) >= total:
+            break
+        if code not in picked:
+            picked.append(code)
+    return set(picked[:total])
+
+
 def pick_param(body):
     """整理荐股筛选参数（带默认与上限保护）。"""
     body = body or {}
@@ -495,6 +527,41 @@ PICK_STOCK_HEADS = ["代码", "名称", "来源板块", "板块分", "现价", "
                     "主力净流入(亿)", "主力净占比%", "PE", "PB", "总市值(亿)", "机械分", "评级"]
 
 
+def pick_merge_rows(cands):
+    """候选字典 → 合并候选榜：同一只股票只留机械分最高的那条，附「模块 / 模块列表」。"""
+    by, order = {}, []
+    for m, rows in (cands or {}).items():
+        for r in rows or []:
+            code = r.get("代码")
+            if not code:
+                continue
+            hit = by.get(code)
+            if hit is None:
+                merged = dict(r)
+                merged["模块"] = m
+                merged["模块列表"] = [m]
+                by[code] = merged
+                order.append(code)
+                continue
+            if m not in hit["模块列表"]:
+                hit["模块列表"].append(m)
+            old = hit.get("机械分")
+            new = r.get("机械分")
+            if (new if new is not None else -1.0) > (old if old is not None else -1.0):
+                mods = hit["模块列表"]
+                merged = dict(r)
+                merged["模块"] = m
+                merged["模块列表"] = mods
+                by[code] = merged
+    rows = [by[c] for c in order]
+    rows.sort(key=lambda x: (x.get("机械分") if x.get("机械分") is not None else -1.0), reverse=True)
+    return rows
+
+
+PICK_MERGE_COLS = ["模块", "模块列表"] + PICK_STOCK_COLS
+
+
+PICK_MERGE_HEADS = ["模块", "入选模块"] + PICK_STOCK_HEADS
 def _pick_factpack(payload, keep):
     """按 keep（每模块候选数）渲染事实包文本。"""
     p = payload.get("参数") or {}
@@ -558,7 +625,9 @@ def pick_markdown(p):
          "- 筛选：行业 %d 个（细分 %s）｜ 概念 %d 个"
          % (len(ind), "、".join("（".join([x.get("名称") or "", str(x.get("细分"))]) + "）"
                                 for x in ind) or "—", len(con)),
-         "- 每板块候选 %s 只 ｜ 候选上限 %s" % (par.get("每板块候选"), par.get("候选上限")),
+         "- 每板块候选 %s 只 ｜ 候选上限 %s ｜ 合并候选 %s 只（四模块合计）"
+         % (par.get("每板块候选"), par.get("候选上限"),
+            p.get("合并候选数") if p.get("合并候选数") is not None else "—"),
          "- 候选池 %d 只 ｜ 交易日参考 %s ｜ 模型 %s ｜ 费用 %s"
          % (p.get("候选池数量") or 0, p.get("交易日") or "—",
             (p.get("配置") or {}).get("model") or "未点评",
@@ -614,9 +683,9 @@ def pick_markdown(p):
                      reverse=True)
         L += ["### %s板块（%d 个）" % (label, len(top)), "",
               pick_table(top, PICK_BOARD_COLS, PICK_BOARD_HEADS), ""]
-    L += ["## 机械层：模块候选", ""]
-    for m, rows in (p.get("候选") or {}).items():
-        L += ["### %s" % m, "", pick_table(rows or [], PICK_STOCK_COLS, PICK_STOCK_HEADS), ""]
+    merged = pick_merge_rows(p.get("候选") or {})
+    L += ["## 机械层：候选榜（四模块合并去重，共 %d 只）" % len(merged), "",
+          pick_table(merged, PICK_MERGE_COLS, PICK_MERGE_HEADS), ""]
     if p.get("降级"):
         L += ["## 数据依赖与降级", ""] + ["- %s" % x for x in p["降级"]] + [""]
     if p.get("降级与不确定性"):

@@ -63,6 +63,23 @@ class TestPickParams(unittest.TestCase):
         # 全非法时回退默认
         self.assertEqual(self.mod.pick_param({"modules": ["不存在"]})["modules"], ["短线"])
 
+    def test_top_codes_merges_modules_into_one_list(self):
+        """四个模块合并后只留 total 只：每模块先保底，再按全局最高机械分补足。"""
+        row = lambda c, s: {"代码": c, "机械分": s}          # noqa: E731
+        scored = {
+            "短线": [row("600001", 99.0), row("600002", 98.0), row("600003", 97.0), row("600004", 96.0)],
+            "中线": [row("600001", 70.0), row("600005", 90.0), row("600006", 89.0), row("600007", 88.0)],
+        }
+        self.assertEqual(self.mod.PICK_PAGE_TOP, 30)         # 总榜固定 30 只（不是每模块 30）
+        self.assertEqual(self.mod.pick_top_codes(scored, ["短线", "中线"], total=5, floor=2),
+                         {"600001", "600002", "600003", "600004", "600005"})
+        self.assertEqual(self.mod.pick_top_codes(scored, ["短线", "中线"], total=3, floor=2),
+                         {"600001", "600002", "600005"})     # 保底占满就不再补足
+        self.assertEqual(len(self.mod.pick_top_codes(scored, ["短线", "中线"], total=30, floor=3)), 7)
+        self.assertEqual(self.mod.pick_top_codes({}, ["短线"], total=5, floor=2), set())
+        self.assertEqual(self.mod.pick_top_codes({"短线": [{"代码": "600001", "机械分": None}]},
+                                                ["短线"], total=5, floor=2), {"600001"})
+
     def test_clamps_out_of_range(self):
         p = self.mod.pick_param({"per_board": 0, "max_candidates": 99999, "max_chars": 10})
         self.assertEqual(p["per_board"], 1)

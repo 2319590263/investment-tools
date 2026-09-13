@@ -213,6 +213,25 @@ const cardHandlers = {
     const name = card.querySelector(".sc-h b");
     showKlineModal(code, name ? name.textContent.trim() : "");
   },
+  onRemove: (code, card) => {
+    const nameEl = card.querySelector(".sc-h b");
+    const name = nameEl ? nameEl.textContent.trim() : "";
+    confirmModal("从自选股移除？",
+      "将把 " + code + " " + name + " 从 自选股.md 里删除（文件有 .bak 备份，持仓不受影响）。",
+      async () => {
+        try {
+          const res = await api("/api/watchlist/remove", { method: "POST",
+            body: JSON.stringify({ code: code }) });
+          if (!res.ok) { toast(res.error || "移除失败", "bad"); return; }
+          toast("已移除 " + code, "ok");
+          if (State.state) {
+            State.state["自选股"] = res["自选股"] || State.state["自选股"];
+            State.state["代码候选"] = res["代码候选"] || State.state["代码候选"];
+          }
+          await loadConsole(lastLive);      // 卡区当场少一张
+        } catch (e) { toast(e.message, "bad"); }
+      }, "确认移除");
+  },
 };
 
 function openCodeReport(code) {

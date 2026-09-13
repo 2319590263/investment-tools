@@ -117,7 +117,9 @@ export function stockCard(item, kind) {
     '<div class="sc-sparkwrap">' + spark + "</div>" + legend +
     '<div class="sc-meta">' + meta.join("") + "</div>" + planRows(item) + note +
     '<div class="sc-act"><button class="btn sm" data-act="run">研判</button>' +
-    '<button class="btn sm ghost" data-act="kline">K线</button></div></div>';
+    '<button class="btn sm ghost" data-act="kline">K线</button>' +
+    (kind === "watch" ? '<button class="btn sm ghost danger" data-act="remove">删除</button>' : "") +
+    "</div></div>";
 }
 
 export function drawSpark(canvas, minute, lines, prevClose) {
@@ -180,6 +182,7 @@ export function bindStockCards(root, handlers) {
         e.stopPropagation();
         if (act.dataset.act === "run" && handlers.onRun) handlers.onRun(code, card.dataset.kind);
         if (act.dataset.act === "kline" && handlers.onKline) handlers.onKline(code, card);
+        if (act.dataset.act === "remove" && handlers.onRemove) handlers.onRemove(code, card);
         return;
       }
       if (handlers.onOpen) handlers.onOpen(code, card.dataset.kind);

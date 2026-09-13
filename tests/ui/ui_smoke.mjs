@@ -175,18 +175,46 @@ if (rkRows > 0) {
       const okWatch = afterCards === beforeCards + 1;
       console.log(`${okWatch ? "PASS" : "FAIL"}  榜单加自选后上方卡区立刻出现（${beforeCards} -> ${afterCards}）`);
       if (!okWatch) failed++;
+      /* 卡片上的「删除」按钮：点 → 确认 → 卡片立刻消失 */
+      const rmBtn = page.locator(`#console-watch .stock-card[data-code="${pickTarget}"] [data-act="remove"]`);
+      const hasRm = await rmBtn.count();
+      if (!hasRm) {
+        console.log("FAIL  自选卡片上没有删除按钮");
+        failed++;
+      } else {
+        await rmBtn.click();
+        await page.waitForSelector("#cf-ok", { timeout: 8000 });
+        await page.click("#cf-ok");
+        await page.waitForFunction(
+          (code) => !document.querySelector(`#console-watch .stock-card[data-code="${code}"]`),
+          pickTarget, { timeout: 15000 });
+        const backCards = await page.locator("#console-watch .stock-card").count();
+        const okRm = backCards === beforeCards;
+        console.log(`${okRm ? "PASS" : "FAIL"}  自选卡片删除按钮生效（${afterCards} -> ${backCards}）`);
+        if (!okRm) failed++;
+      }
     } catch (e) {
       console.log("FAIL  榜单加自选后上方卡区没更新：" + String(e).slice(0, 80));
       failed++;
     } finally {
       await page.evaluate(async (code) => {
-        await fetch("/api/watchlist/remove", { method: "POST",
-          headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
+        try {                                          // 兜底：万一上面中断，别在自选里留残留
+          const doc = await (await fetch("/api/watchlist")).json();
+          const still = (doc["条目"] || []).some(x => String(x["代码"] || "").slice(0, 6) === code);
+          if (!still) return;                          // 卡片按钮已经删掉了就别再删（会 400）
+          await fetch("/api/watchlist/remove", { method: "POST",
+            headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
+        } catch (e) { /* 忽略：文件本身没被改坏 */ }
       }, pickTarget);
     }
   } else {
     console.log("INFO  榜单前 30 行都已在自选里，跳过「加自选刷新卡区」断言");
   }
+  const watchCards = await page.locator("#console-watch .stock-card").count();
+  const watchRm = await page.locator('#console-watch .stock-card [data-act="remove"]').count();
+  const rmAll = watchCards > 0 && watchRm === watchCards;
+  console.log(`${rmAll ? "PASS" : "FAIL"}  每张自选卡片都有删除按钮（${watchRm}/${watchCards}）`);
+  if (!rmAll) failed++;
   const onMods = await page.$$eval("#console-pick-mods button.on", els => els.map(e => e.dataset.rkMod));
   const disabledMods = await page.$$eval("#console-pick-mods button[disabled]", els => els.map(e => e.dataset.rkMod));
   if (disabledMods.length) {
@@ -287,6 +315,19 @@ if (await box.count()) {
   console.log("FAIL  荐股页没有渲染出可勾选的行业");
   failed++;
 }
+
+/* ---- 荐股结果页：候选榜是四模块合并后的一张表（≤30 只） ---- */
+await page.waitForSelector("#pick-cand", { timeout: 25000 }).catch(() => {});
+const candRows = await page.locator("#pick-cand tbody tr").count();
+const candOk = candRows > 0 && candRows <= 30;
+console.log(`${candOk ? "PASS" : "FAIL"}  候选榜只有一张合并表（${candRows} 行，四模块合计）`);
+if (!candOk) failed++;
+const perModuleTables = await page.locator('#pick-result .card[id^="pick-mod-"] table.tbl tbody tr').count();
+console.log(`${perModuleTables === 0 ? "PASS" : "FAIL"}  不再按模块各列一遍候选（模块卡里的候选行 ${perModuleTables}）`);
+if (perModuleTables !== 0) failed++;
+const hasPriceCol = await page.locator('#pick-cand tbody tr td.wrap').count();
+console.log(`${hasPriceCol > 0 ? "PASS" : "FAIL"}  候选榜带精确价位列（${hasPriceCol} 行有）`);
+if (!hasPriceCol) failed++;
 
 await browser.close();
 
