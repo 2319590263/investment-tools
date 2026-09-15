@@ -1,4 +1,4 @@
-/* 交易流分时图：分时价格线 + 均价线 + 昨收虚线 + 计划线 + 买卖点标记。
+/* 交易流分时图：只画**分时价格线 + 买卖线**（用户批注 1：去掉所有多余的线，只要买卖线）。
  *
  * 只画图，不发请求；数据来自 /api/flow/minutes。计划线用与卡片同一份
  * planprices.js 收敛成精确价位，避免第二套口径。
@@ -51,16 +51,15 @@ export function drawFlowMinutes(canvas, data) {
   const { ctx, w, h } = scale(canvas);
   const minute = data["分时"] || {};
   const prices = (minute["价格"] || []).map(num);
-  const avgs = (minute["均价"] || []).map(num);
   const times = minute["时间"] || [];
-  const prev = num(data["昨收"]);
-  const cur = num((data["报价"] || {})["价格"]);
-  const lines = flowLines(data["关键价位"], cur);
   const padL = 52, padR = 96, padT = 16, padB = 22;
   const plotW = Math.max(60, w - padL - padR), plotH = Math.max(40, h - padT - padB);
-  const points = prices.concat(avgs).filter(v => v !== null);
-  if (prev !== null) points.push(prev);
-  lines.forEach(l => points.push(l.v));
+  // 纵轴范围只看分时价与买卖线（均价/计划线/昨收都不画，用户批注 1：只要买卖线）
+  const points = prices.filter(v => v !== null);
+  (data["成交"] || []).forEach(f => {
+    const v = num(f["价格"]);
+    if (v !== null) points.push(v);
+  });
   if (!points.length) {
     ctx.fillStyle = C.text;
     ctx.font = "12px system-ui, sans-serif";
@@ -83,40 +82,24 @@ export function drawFlowMinutes(canvas, data) {
     ctx.stroke();
   };
   ctx.fillStyle = C.bg; ctx.fillRect(padL, padT, plotW, plotH);
-  if (prev !== null) {
-    ctx.save(); ctx.setLineDash([4, 4]); ctx.strokeStyle = C.prev; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(padL, y(prev)); ctx.lineTo(padL + plotW, y(prev)); ctx.stroke();
-    ctx.restore();
-  }
-  lines.forEach(l => {
-    ctx.strokeStyle = l.color; ctx.globalAlpha = 0.75; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(padL, y(l.v)); ctx.lineTo(padL + plotW, y(l.v)); ctx.stroke();
-    ctx.globalAlpha = 1;
-    ctx.fillStyle = l.color; ctx.font = "11px system-ui, sans-serif";
-    ctx.fillText(l.label + " " + fmt(l.v, 3), padL + plotW + 6, y(l.v) + 4);
-  });
-  seg(avgs, C.avg, 1.2);
+  /* 只保留分时线 + 买卖线（批注 1）：均价线、计划线、昨收虚线都不画，避免线条与文字重叠 */
   seg(prices, C.price, 1.6);
-  /* 买卖线（批注 4）：成交不再画点，而是按成交价画一条贯穿到该时刻的水平线，
-     买=红虚线、卖=绿虚线；左侧标「买 8.14 / 卖 8.20」。 */
+  /* 买卖线（批注 1/4）：每笔成交按成交价画一条**贯穿全宽**的水平线（买=红、卖=绿），
+     标签放在右端，避免与左侧价格刻度、曲线重叠。 */
   const today = data["分时日期"];
   (data["成交"] || []).forEach(f => {
     const i = fillIndex(times, f["日期"], today, f["时间"]);
     const price = num(f["价格"]);
     if (i === null || price === null) return;
     const buy = String(f["方向"] || "") === "买入";
-    const cx = x(Math.min(i, Math.max(prices.length - 1, 1)));
     const cy = y(price);
     ctx.save();
-    ctx.setLineDash([3, 3]);
     ctx.strokeStyle = buy ? C.buy : C.sell;
-    ctx.lineWidth = 1.2;
-    ctx.beginPath(); ctx.moveTo(padL, cy); ctx.lineTo(cx, cy); ctx.stroke();
-    ctx.setLineDash([]);
+    ctx.lineWidth = 1.4;
+    ctx.beginPath(); ctx.moveTo(padL, cy); ctx.lineTo(padL + plotW, cy); ctx.stroke();  // 整宽买卖线
     ctx.fillStyle = buy ? C.buy : C.sell;
-    ctx.beginPath(); ctx.arc(cx, cy, 2.2, 0, Math.PI * 2); ctx.fill();
     ctx.font = "11px system-ui, sans-serif";
-    ctx.fillText((buy ? "买 " : "卖 ") + fmt(price, 3), 6, cy - 3);
+    ctx.fillText((buy ? "买 " : "卖 ") + fmt(price, 3), padL + plotW + 6, cy + 4);
     ctx.restore();
   });
   ctx.fillStyle = C.text; ctx.font = "11px system-ui, sans-serif";
@@ -127,10 +110,10 @@ export function drawFlowMinutes(canvas, data) {
     ctx.fillText(String(times[times.length - 1]).slice(0, 5), padL + plotW - 28, h - 6);
   }
   canvas.dataset.map = JSON.stringify({ padL, plotW, padT, plotH, lo, hi, n, times, prices });
-  return { times, prices, avgs, lo, hi };
+  return { times, prices, lo, hi };
 }
 
-/* hover：显示「时间 价格 均价」，并把当天的成交点提示出来。 */
+/* hover：显示「时间 价格」。 */
 export function bindFlowChart(canvas) {
   if (!canvas || canvas.dataset.bound === "1") return;
   canvas.dataset.bound = "1";

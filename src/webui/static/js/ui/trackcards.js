@@ -105,15 +105,16 @@ export function trackLevelsHtml(brief, levels, lots) {
 export function trackPlanTableHtml(plan) {
   if (!plan || !plan.length) return '<div class="muted">这份计划里没有可执行条目。</div>';
   let html = '<div class="table-wrap" style="max-height:none"><table class="tbl"><thead><tr>' +
-    "<th>#</th><th>动作</th><th>触发条件</th><th>价格区间</th><th class='num'>股数</th>" +
+    "<th>#</th><th>动作</th><th>触发条件</th><th class='num'>精确价</th><th class='num'>股数</th>" +
     "<th class='num'>金额</th><th>失效条件</th></tr></thead><tbody>";
   plan.forEach(r => {
+    /* 精确价（用户批注 5）：只给一个可执行价位；失效条件已由服务端过滤掉「只说反面」的废话 */
+    const px = num(r["精确价"]);
     html += "<tr>" +
       "<td>" + esc(r["编号"]) + "</td>" +
       "<td><b>" + esc(r["动作"] || "—") + "</b>" + (r["无动作"] ? chip("无动作", "flat") : "") + "</td>" +
       '<td class="wrap muted">' + esc(r["触发条件"] || "—") + "</td>" +
-      '<td class="mono">' +
-        esc(Array.isArray(r["价格区间"]) ? r["价格区间"].join(" ~ ") : (r["价格区间"] || "—")) + "</td>" +
+      '<td class="num mono"><b>' + (px === null ? "—" : fmt(px, 3)) + "</b></td>" +
       '<td class="num">' + (r["股数"] == null ? "—" : fmt(r["股数"], 0)) + "</td>" +
       '<td class="num">' + (r["金额_元"] == null ? "—" : fmt(r["金额_元"], 0)) + "</td>" +
       '<td class="wrap muted">' + esc(r["失效条件"] || "—") + "</td></tr>";

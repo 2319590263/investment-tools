@@ -83,6 +83,44 @@ export function marketForecastCard(res) {
   return card("大盘走势预测", html);
 }
 
+/* 一键抓取大盘快照（批注 4）：跑一次 pan.py post，落 data/pan/<今天>/，不调模型。 */
+export async function runPanJob() {
+  const btn = $("#btn-pan-run");
+  const st = $("#pan-run-state");
+  if (btn) btn.disabled = true;
+  if (st) st.textContent = "正在抓取 …";
+  try {
+    const res = await api("/api/jobs", {method: "POST", body: JSON.stringify({kind: "pan"})});
+    if (!res.ok) throw new Error(res.error || "启动失败");
+    const _fresh = freshNote(res);
+    if (_fresh) toast(_fresh, "warn");
+    let guard = 0;
+    while (guard++ < 200) {
+      const j = await api("/api/jobs/" + res.id + "?from=0");
+      if (j.status !== "running") {
+        if (btn) btn.disabled = false;
+        if (j.status === "done") {
+          if (st) st.textContent = "已抓取，用时 " + j.elapsed + "s";
+          toast("大盘快照已更新", "ok");
+          await loadMarket();
+        } else {
+          if (st) st.textContent = "抓取失败（退出码 " + j.exit_code + "）";
+          toast("抓取失败：看控制台里的 [FAIL] 一行", "bad");
+        }
+        return;
+      }
+      await sleep(900);
+    }
+    if (btn) btn.disabled = false;
+    if (st) st.textContent = "超时";
+  } catch (e) {
+    if (btn) btn.disabled = false;
+    if (st) st.textContent = "失败：" + e.message;
+    toast(e.message, "bad");
+  }
+}
+
+
 export async function runMarketForecast() {
   const btn = $("#fc-run");
   const st = $("#fc-status");
@@ -149,11 +187,16 @@ export async function loadMarket() {
        这里给一张带操作指引的卡，而不是一片空白。 */
     body.innerHTML = '<div class="card"><div class="card-h"><span>没有行情快照</span>' +
       '<span class="muted">data/pan/ 下没有可用的最新快照</span></div>' +
-      '<div class="card-b"><div class="hint">过期的快照已按「事实包不许用过期数据」自动清理' +
+      '<div class="card-b"><div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">' +
+      '<button class="btn primary" id="btn-pan-run">一键抓取大盘快照</button>' +
+      '<span class="muted" id="pan-run-state"></span></div>' +
+      '<div class="hint">过期的快照已按「事实包不许用过期数据」自动清理' +
       '（移入 data/ai/.trash/stale/，7 天后真删）。想恢复大盘背景与事实包里的量能数据，' +
       '先跑一次：<code>python main.py pan post</code>；个股消息面用 ' +
       '<code>python main.py stock3d pull &lt;代码&gt;</code>（或直接在「运行研判」里跑）。' +
       '</div></div></div>';
+    const btn = $("#btn-pan-run");
+    if (btn) btn.addEventListener("click", runPanJob);
     return;
   }
   const dd = doc.data || {};

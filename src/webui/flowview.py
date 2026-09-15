@@ -50,7 +50,7 @@ def target_card(flow_doc, node, fresh=None):
                  "方向": plan.get("方向"), "置信度": plan.get("置信度"),
                  "一句话结论": plan.get("一句话结论"), "错误": plan.get("错误"),
                  "关键价位": plan.get("关键价位") or {}, "条目": plan.get("条目") or []},
-        "下一步": flow.next_action(node),
+        "下一步": flow.next_action(node, price=pnl.get("现价")),
         "到价": flow.marks(node, pnl.get("现价")),
         "本次提醒": [m.get("文案") for m in (fresh or [])],
         "待重算": flow.plan_stale(node),
@@ -170,6 +170,16 @@ def detail(fid, quote_map=None, refresh=False, today=None, code=None):
     blocks = []
     for node in flow.targets(doc):
         card = target_card(doc, node)
+        from .planlines import meaningful_failure, trigger_price
+        live = (node.get("盈亏") or {}).get("现价")
+        items = []
+        for it in (card["计划"].get("条目") or []):
+            row = dict(it)
+            row["精确价"] = trigger_price(row.get("价格区间"), row.get("动作"), live)
+            row["失效条件"] = meaningful_failure(row.get("失效条件") or row.get("失效条件原文"),
+                                                 row.get("价格区间"), row.get("动作"))
+            items.append(row)
+        card["计划"]["条目"] = items
         plan = card["计划"]
         blocks.append({
             "卡": card, "代码": node.get("代码"), "名称": node.get("名称"),
@@ -177,7 +187,7 @@ def detail(fid, quote_map=None, refresh=False, today=None, code=None):
             "成交": node.get("成交") or [],
             "事件": list(reversed(node.get("事件") or []))[:80],
             "体检": node.get("体检") or [],
-            "计划": plan, "计划条目": plan.get("条目") or [],
+            "计划": plan, "计划条目": items,
             "关键价位": plan.get("关键价位") or {},
             "持仓": node.get("持仓") or {}, "盈亏": node.get("盈亏") or {},
             "台账": node.get("台账") or {}, "期初": node.get("期初") or {},

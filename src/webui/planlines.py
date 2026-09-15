@@ -7,6 +7,7 @@
 
 import copy
 import os
+import re
 
 from .paths import ROOT, aiplan, num, rel
 from .plancheck import is_noop, parse_range, plan_kind
@@ -33,6 +34,55 @@ def lots_text(shares):
     if rest == 0:
         return "%d 手" % whole
     return ("%d 手 %d 股" % (whole, rest)) if whole else ("%d 股" % rest)
+
+
+def trigger_price(rng, act=None, price=None):
+    """价格区间 → **一个可执行价位**（与报告页 ui/planprices.js 同一口径）。
+
+    规则：整段在现价上方取下沿、整段在现价下方取上沿、含现价取下沿；
+    没有现价时按动作判断（卖出类取上沿，其余取下沿）。
+    """
+    pair = parse_range(rng)
+    if not pair:
+        vals = [num(x) for x in re.findall(r"\d+(?:\.\d+)?", str(rng or ""))]
+        vals = [v for v in vals if v is not None]
+        if not vals:
+            return None
+        if len(vals) == 1:
+            return vals[0]
+        pair = (min(vals), max(vals))
+    lo, hi = pair
+    cur = num(price)
+    if cur is not None:
+        if hi < cur:
+            return hi
+        if lo > cur:
+            return lo
+        return lo
+    is_sell = plan_kind(act) == "卖出" or any(w in str(act or "") for w in ("减", "清", "卖", "止盈"))
+    return hi if is_sell else lo
+
+
+def meaningful_failure(text, rng=None, act=None):
+    """失效条件过滤：只重复「触发价的反面」且没有别的信息 → 返回空串。
+
+    模型经常写「价格<8.22」这种与触发条件互为反向、等于没说的废话（用户批注 6）。
+    判定：文本里出现的价格与触发价相差 ≤0.5%（或 0.01 元）且没有其他价位 → 视为废话。
+    """
+    txt = str(text or "").strip()
+    if not txt:
+        return ""
+    px = trigger_price(rng, act, None)
+    if px is None:
+        return txt
+    nums = [num(x) for x in re.findall(r"\d+(?:\.\d+)?", txt)]
+    nums = [v for v in nums if v is not None]
+    if not nums:
+        return txt
+    near = [v for v in nums if abs(v - px) <= max(abs(px) * 0.005, 0.011)]
+    if near and len(near) == len(nums):
+        return ""
+    return txt
 
 
 def report_levels(path):

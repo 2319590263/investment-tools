@@ -271,6 +271,11 @@ def diagnose_job(job):
 JOBS = JobManager()
 
 
+def build_pan_argv():
+    """一键抓大盘快照：跑根目录 pan.py post（落 data/pan/<今天>/，只读、不调模型）。"""
+    return [PYTHON, "-X", "utf8", os.path.join(ROOT, "pan.py"), "post"]
+
+
 def build_run_argv(body):
     phase = (body.get("phase") or "post").strip()
     if phase not in PHASES:

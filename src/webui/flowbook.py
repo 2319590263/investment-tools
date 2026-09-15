@@ -589,8 +589,8 @@ def plan_stale(node, now=None):
     return {"待重算": True, "说明": "今天的盘后计划还没重算"}
 
 
-def next_action(node):
-    """卡片上的「下一步」：优先到价标记，其次第一条可执行计划条目。"""
+def next_action(node, price=None):
+    """卡片上的「操作」：优先到价标记，其次第一条可执行计划条目（**只给精确价，不给区间**）。"""
     ms = marks(node)
     if ms:
         rank = {"bad": 0, "accent": 1, "ok": 2, "warn": 3, "info": 4}
@@ -598,13 +598,14 @@ def next_action(node):
         return top.get("文案") or ""
     items = [i for i in ((node.get("计划") or {}).get("条目") or []) if not i.get("无动作")]
     if not items:
-        return "还没有计划：点「重算计划」生成一份"
+        return "还没有计划：点「计算」生成一份"
     r = items[0]
-    rng = r.get("价格区间")
-    if isinstance(rng, (list, tuple)):
-        txt = " ~ ".join(_f(num(x), 3) for x in rng)
-    else:
-        txt = str(rng or "")
+    from .planlines import trigger_price
+    px = num(r.get("精确价"))
+    if px is None:
+        px = trigger_price(r.get("价格区间"), r.get("动作"),
+                           price if price is not None else (node.get("盈亏") or {}).get("现价"))
+    txt = _f(px, 3) if px is not None else "—"
     qty = num(r.get("股数"))
     return "%s %s%s" % (r.get("动作") or "—", txt, ("（%s 股）" % _f(qty, 0)) if qty else "")
 

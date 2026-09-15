@@ -637,6 +637,11 @@ input.inline-input:focus { outline: none; border-color: var(--accent); }
   border-radius: 6px; cursor: crosshair; }
 .fl-chart-tip { margin-top: 4px; font-size: 12px; }
 .fl-min-refresh { margin-left: 8px; }
+.fl-chart-row td { padding-top: 6px; padding-bottom: 10px; }
+/* 分时图下方的操作按钮：横向一排（左对齐、自动换行），不再是原来的右侧竖排 */
+.fl-chart-row .fl-row-act { flex-direction: row; flex-wrap: wrap; gap: 6px; margin-top: 8px;
+  align-items: center; justify-content: flex-start; }
+.fl-chart-row .fl-row-act .btn { width: auto; }
 
 /* ---- 运行页：多选标的 ---- */
 .code-picked { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }

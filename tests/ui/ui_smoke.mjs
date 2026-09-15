@@ -382,11 +382,16 @@ if (flowCards > 0) {
   console.log(`${targetTables >= 1 ? "PASS" : "FAIL"}  流卡片里有标的表`);
   if (targetTables < 1) failed++;
 }
-/* 批注 1/2/4：行内分时图（买卖线 + 计划线）与「计算」按钮 */
-const calcBtns = await page.locator("#flow-list [data-act='plan']").allInnerTexts().catch(() => []);
+/* 批注 1/2/4：行内分时图 + 按钮已移到图下方 */
+const calcBtns = await page.locator("#flow-list .fl-chart-row [data-act='plan']").allInnerTexts().catch(() => []);
 const calcOk = calcBtns.some(x => x.trim() === "计算");
-console.log(`${calcOk ? "PASS" : "FAIL"}  行内按钮已改名「计算」（${calcBtns.join("/")}）`);
+console.log(`${calcOk ? "PASS" : "FAIL"}  「计算」按钮在分时图下方（${calcBtns.join("/")}）`);
 if (!calcOk) failed++;
+const headCols = await page.locator("#flow-list table.fl-targets thead th").allInnerTexts().catch(() => []);
+const noBtnCol = !headCols.includes("按钮");
+console.log(`${noBtnCol ? "PASS" : "FAIL"}  表格不再有「按钮」列（列头：${headCols.join("/")}）`);
+if (!noBtnCol) failed++;
+
 await page.waitForSelector("#flow-list canvas.fl-chart", { timeout: 25000 }).catch(() => {});
 const rowCharts = await page.locator("#flow-list canvas.fl-chart").count();
 console.log(`${rowCharts > 0 ? "PASS" : "FAIL"}  标的行内分时图已渲染（${rowCharts} 张）`);
@@ -412,6 +417,12 @@ if (flowCards > 0) {
   const tabs = await page.locator("#flow-detail [data-tab]").count();
   console.log(`${tabs > 0 ? "PASS" : "FAIL"}  流详情有标的页签（${tabs} 只）`);
   if (!tabs) failed++;
+  const planText = await page.locator("#flow-detail").innerText().catch(() => "");
+  const hasRange = /~/.test(planText);
+  console.log(`${!hasRange ? "PASS" : "FAIL"}  计划条目给精确价、没有区间（~ ${hasRange}）`);
+  if (hasRange) failed++;
+  console.log(`${/精确价/.test(planText) ? "PASS" : "FAIL"}  计划条目表带「精确价」列`);
+  console.log(`${/买卖线/.test(planText) ? "PASS" : "FAIL"}  分时口径写明「买卖线」`);
 } else {
   console.log("INFO  还没有交易流，跳过详情断言（开流表单已在上面断言）");
 }

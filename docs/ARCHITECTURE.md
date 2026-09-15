@@ -148,6 +148,8 @@ viewApi("report").refreshReports();
   并按原文件的 BOM / 换行风格写回。
 8. **删除**：一律移动进 `data/ai/.trash/<日期>/`（`archive.delete_*`），回收站
    `trash.py` 负责列出、恢复、以及超过 7 天的真删。
+8.5 **一键抓大盘快照**：`POST /api/jobs {kind:"pan"}` → `jobs.build_pan_argv()` 起 `pan.py post`（只抓行情、不调模型）→ 落 `data/pan/<今天>/`，页面空态卡上直接可点。
+
 9. **标的跟踪（每日计划 → 执行 → 次日计划）**：`POST /api/jobs {kind:"track"}` →
    `track_run.run_track` 逐只标的：`quotes.fetch_quotes` 一次批量报价（1 次请求）+
    `background.latest_pan/stock3d_tech` 背景 → `track.factpack_sections` 拼事实包（超上限先砍板块 →

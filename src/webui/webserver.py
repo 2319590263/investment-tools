@@ -23,7 +23,7 @@ from .archive import delete_pick, delete_plan_log, delete_report, latest_pick_bu
 from . import alerts as alerts_store
 from . import flowapi
 from .holdings_sync import CAPTCHA_ROOT, captcha_image, holdings_python, install_hint, submit_captcha_answer
-from .jobs import JOBS, build_check_argv, build_run_argv, run_batch
+from .jobs import JOBS, build_check_argv, build_pan_argv, build_run_argv, run_batch
 from .market import (build_market, build_state, build_symbols, kline_bundle,
                      latest_market_forecast, run_market_forecast)
 from .overview import build_overview
@@ -338,9 +338,8 @@ class Handler(BaseHTTPRequestHandler):
                                "原文": read_text(TRACKLIST_PATH)})
         if path == "/api/ledger":
             # 持仓页「交易明细」：交易台账只读视图（批注 4）
-            code = (q.get("code", [""])[0] or "").strip()
-            limit = (q.get("limit", ["500"])[0] or "500")
-            return self._json(ledger_view(code or None, limit))
+            return self._json(ledger_view((q.get("code", [""])[0] or "").strip() or None,
+                                          q.get("limit", ["500"])[0]))
         if path == "/api/track/all":
             refresh = (q.get("refresh", ["0"])[0] or "0") in ("1", "true", "yes")
             return self._json(build_track_overview(refresh=refresh))
@@ -585,6 +584,10 @@ class Handler(BaseHTTPRequestHandler):
                                  func=lambda log, ctl: run_market_forecast(
                                      log, profile=prof, model_pro=body.get("model_pro"),
                                      api_base=body.get("api_base"), api_key=body.get("api_key")))
+                return self._json({"ok": True, "id": job["id"], "命令": job["命令"], "清理": fresh})
+            elif kind == "pan":
+                job = JOBS.start(kind, build_pan_argv(), {"label": "抓取大盘快照"},
+                                 label="抓取大盘快照（pan post）")
                 return self._json({"ok": True, "id": job["id"], "命令": job["命令"], "清理": fresh})
             elif kind == "pick":
                 opts = pick_param(body)

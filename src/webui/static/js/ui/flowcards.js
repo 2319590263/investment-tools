@@ -83,20 +83,23 @@ function targetRow(t) {
   html += "<td>" + (marks.length
     ? marks.slice(0, 2).map(m => chip(m["类型"], markCls(m["级别"]))).join("")
     : '<span class="muted">—</span>') + "</td>";
-  html += '<td class="fl-row-act">' +
+  html += "</tr>";
+  /* 分时图紧贴标的那一行，**操作按钮放到分时图下方**（批注 2/3）：
+     表格不再有按钮列，行高只由标的信息决定，中间不会再有空白。 */
+  html += '<tr class="fl-chart-row"><td colspan="9">' +
+    '<canvas class="fl-chart" data-chart-code="' + esc(code) + '"></canvas>' +
+    '<div class="muted" data-chart-note="' + esc(code) + '">正在取分时 …</div>' +
+    '<div class="row fl-row-act">' +
     '<button class="btn sm ghost" data-act="minutes" data-code="' + esc(code) + '">分时</button>' +
     '<button class="btn sm ghost" data-act="detail" data-code="' + esc(code) + '">详情</button>' +
     '<button class="btn sm ghost" data-act="plan" data-code="' + esc(code) + '">计算</button>' +
     '<button class="btn sm ghost" data-act="check" data-code="' + esc(code) + '">体检</button>' +
     '<button class="btn sm ghost" data-act="setstyle" data-code="' + esc(code) + '">改打法</button>' +
     (t["状态"] === "进行中"
-      ? '<button class="btn sm ghost" data-act="closetarget" data-code="' + esc(code) + '">结束</button>' : "") +
+      ? '<button class="btn sm ghost" data-act="closetarget" data-code="' + esc(code) + '">结束</button>'
+      : "") +
     '<button class="btn sm danger" data-act="remove" data-code="' + esc(code) + '">移除</button>' +
-    "</td></tr>";
-  /* 分时图直接放在这只标的的行下面（批注 2）：买卖线 + 计划线，进页面就画（60 秒缓存） */
-  html += '<tr class="fl-chart-row"><td colspan="10">' +
-    '<canvas class="fl-chart" data-chart-code="' + esc(code) + '"></canvas>' +
-    '<div class="muted" data-chart-note="' + esc(code) + '">正在取分时 …</div></td></tr>';
+    "</div></td></tr>";
   return html;
 }
 
@@ -128,9 +131,9 @@ export function flowCard(c) {
   html += '<div class="table-wrap"><table class="tbl fl-targets"><thead><tr>' +
     "<th>标的 / 计划</th><th>打法 / 状态</th><th class='num'>分配资金</th><th class='num'>现价</th>" +
     "<th class='num'>持仓</th><th class='num'>合计盈亏</th><th class='num'>收益率</th>" +
-    "<th>操作</th><th>到价</th><th>按钮</th></tr></thead><tbody>" +
+    "<th>操作</th><th>到价</th></tr></thead><tbody>" +
     (targets.length ? targets.map(targetRow).join("")
-      : '<tr><td class="empty" colspan="10">这条流还没有标的：在下面「添加标的」里加一只。</td></tr>') +
+      : '<tr><td class="empty" colspan="9">这条流还没有标的：在下面「添加标的」里加一只。</td></tr>') +
     "</tbody></table></div>";
   html += '<details class="fl-add"><summary>添加标的（还可以加 ' +
     (remain == null ? "—" : fmtMoney(remain, 0)) + " 元）</summary>" +
@@ -294,7 +297,7 @@ function targetBody(t, tools) {
   html += '<div class="sec-title">当前计划的关键价位（精确价 + 手数）</div>' +
     trackLevelsHtml({价格: pnl["现价"]}, t["关键价位"], lots);
   /* 分时图：买卖点标在成交价上，计划线用同一份 planprices.js 收敛（批注 1）。 */
-  html += '<div class="sec-title">当日分时（买卖点 + 计划线）' +
+  html += '<div class="sec-title">当日分时（买卖线）' +
     '<button class="btn sm ghost fl-min-refresh" data-act="minutes" data-code="' + esc(code) +
     '">刷新分时</button></div>' +
     '<div class="fl-chart-box"><canvas class="fl-chart" data-chart-code="' + esc(code) + '"></canvas>' +
