@@ -19,11 +19,23 @@ from .paths import aiplan, num, rel
 from .store import load_account_bundle
 
 
+def pick(body, *keys, **kw):
+    """按多个键名取值（页面用中文键、脚本常用英文键，两种都得认）。
+
+    这个函数的由来：`/api/flow/target/add` 曾经只读 `code`，而页面表单发的是 `代码`，
+    结果服务端拿到空值、回了一句「请填 6 位证券代码」——六个数字明明填对了。
+    """
+    default = kw.get("default")
+    for key in keys:
+        value = (body or {}).get(key)
+        if value not in (None, ""):
+            return value
+    return default
+
+
 def codes_of(body):
     """请求里的标的代码：支持字符串 / 列表 / 逗号分隔。"""
-    raw = body.get("代码")
-    if raw in (None, ""):
-        raw = body.get("code")
+    raw = pick(body, "代码", "code")
     if raw in (None, ""):
         return []
     items = raw if isinstance(raw, (list, tuple)) else re.split(r"[,，\s]+", str(raw))
@@ -138,8 +150,10 @@ def handle_post(handler, path, body):
         account = load_account_bundle().get("配置") or {}
         doc, err = flow_store.create_flow(
             body.get("流资金"), body.get("目标收益率_pct"), body.get("最大亏损_pct"),
-            note=body.get("备注"), code=body.get("code"), name=body.get("name"),
-            style=body.get("打法"), alloc=body.get("分配资金"), start=body.get("起始持仓"),
+            note=body.get("备注"), code=pick(body, "code", "代码"),
+            name=pick(body, "name", "名称"),
+            style=pick(body, "打法", "style"), alloc=pick(body, "分配资金", "alloc"),
+            start=pick(body, "起始持仓", "start"),
             account_total=num(account.get("总资金")))
         if err:
             handler._err(err)
@@ -152,9 +166,11 @@ def handle_post(handler, path, body):
         if err:
             handler._err(err, 404)
             return True
-        node, err = flow_store.add_target(doc, body.get("code"), body.get("name"),
-                                          style=body.get("打法"), alloc=body.get("分配资金"),
-                                          start=body.get("起始持仓"))
+        node, err = flow_store.add_target(doc, pick(body, "代码", "code"),
+                                          pick(body, "名称", "name"),
+                                          style=pick(body, "打法", "style"),
+                                          alloc=pick(body, "分配资金", "alloc"),
+                                          start=pick(body, "起始持仓", "start"))
         if err:
             handler._err(err)
             return True
@@ -167,7 +183,7 @@ def handle_post(handler, path, body):
         if err:
             handler._err(err, 404)
             return True
-        doc, err = flow_store.remove_target(doc, body.get("代码") or body.get("code"))
+        doc, err = flow_store.remove_target(doc, pick(body, "代码", "code"))
         if err:
             handler._err(err)
             return True
@@ -179,8 +195,9 @@ def handle_post(handler, path, body):
         if err:
             handler._err(err, 404)
             return True
-        doc, err = flow_store.set_target(doc, body.get("代码") or body.get("code"),
-                                         style=body.get("打法"), alloc=body.get("分配资金"))
+        doc, err = flow_store.set_target(doc, pick(body, "代码", "code"),
+                                         style=pick(body, "打法", "style"),
+                                         alloc=pick(body, "分配资金", "alloc"))
         if err:
             handler._err(err)
             return True

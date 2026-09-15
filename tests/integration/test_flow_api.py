@@ -84,7 +84,7 @@ class TestFlowApi(unittest.TestCase):
         """加第一只标的（跳过已有进行中流的代码）。"""
         for cand in CANDIDATES:
             status, out = self.server.post("/api/flow/target/add", {
-                "流编号": fid, "code": cand, "name": "测试标的"})
+                "流编号": fid, "代码": cand, "名称": "测试标的"})
             if status == 200:
                 return cand
             self.assertIn("只属于一条流", out.get("error", ""), out)
@@ -115,9 +115,11 @@ class TestFlowApi(unittest.TestCase):
 
         # 加第一只标的：打法 + 分配资金（默认全部流资金）
         code_a, code_b = self._free_codes(2)
+        # 按页面的口径发（中文键；曾经只认 code 导致「请填 6 位证券代码」的假报错）
         status, added = self.server.post("/api/flow/target/add", {
-            "流编号": fid, "code": code_a, "name": "平安银行"})
+            "流编号": fid, "代码": code_a, "名称": "平安银行"})
         self.assertEqual(status, 200, added)
+        self.assertEqual(added["标的"]["代码"], code_a)
         self.assertEqual(added["标的"]["打法"], "短线", "打法默认短线")
         self.assertEqual(added["标的"]["分配资金"], float(self.capital))
         status, set0 = self.server.post("/api/flow/target/set", {
