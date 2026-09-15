@@ -1,4 +1,5 @@
-/* 交易流分时图：只画**分时价格线 + 买卖线**（用户批注 1：去掉所有多余的线，只要买卖线）。
+/* 交易流分时图：分时价格线 + **交易计划里的操作买卖线**（买点 / 减仓 / 止损 / 止盈点）。
+ * 用户口径：图上要的是「交易计划里的操作价位」，不是成交点，也不是均价/昨收这类均线。
  *
  * 只画图，不发请求；数据来自 /api/flow/minutes。计划线用与卡片同一份
  * planprices.js 收敛成精确价位，避免第二套口径。
@@ -10,6 +11,7 @@ const C = { price: "#4c8dff", avg: "#e2b03c", prev: "#5b6b7f",
             buy: "#f05a63", sell: "#2ec27e", target: "#c084fc",
             text: "#7f8fa6", line: "#26333f", bg: "#141a21", tip: "#0f151b" };
 
+/* 计划的操作价位线（同价合并成一条，标签用「·」拼起来）。 */
 export function flowLines(levels, price) {
   const lv = levels || {};
   const out = [];
@@ -19,17 +21,12 @@ export function flowLines(levels, price) {
   add(num(lv["止损"]), "止损", C.sell);
   const goal = nearestTarget(lv["目标"], price);
   if (goal) out.push({ v: goal.v, label: "止盈点", color: C.target });
-  return out;
-}
-
-/* 成交点 → 分时序列下标（当天成交按时间就近吸附）。 */
-function fillIndex(times, date, today, when) {
-  if (!times.length || String(date || "") !== String(today || "")) return null;
-  const hhmm = String(when || "").slice(0, 5);
-  if (!hhmm) return null;
-  let idx = null;
-  times.forEach((t, i) => { if (String(t).slice(0, 5) <= hhmm) idx = i; });
-  return idx === null ? 0 : idx;
+  const merged = [];                       // 同价（±0.1%）合并：买点与止盈点撞在一起时只画一条
+  out.forEach(x => {
+    const hit = merged.find(m => Math.abs(m.v - x.v) <= Math.max(m.v * 0.001, 0.005));
+    if (hit) { hit.label += "·" + x.label; } else merged.push(Object.assign({}, x));
+  });
+  return merged.sort((a, b) => b.v - a.v);
 }
 
 function scale(canvas) {
@@ -54,12 +51,10 @@ export function drawFlowMinutes(canvas, data) {
   const times = minute["时间"] || [];
   const padL = 52, padR = 96, padT = 16, padB = 22;
   const plotW = Math.max(60, w - padL - padR), plotH = Math.max(40, h - padT - padB);
-  // 纵轴范围只看分时价与买卖线（均价/计划线/昨收都不画，用户批注 1：只要买卖线）
+  // 纵轴范围 = 分时价 + 计划的操作价位线（均价/昨收/成交点都不画）
   const points = prices.filter(v => v !== null);
-  (data["成交"] || []).forEach(f => {
-    const v = num(f["价格"]);
-    if (v !== null) points.push(v);
-  });
+  const planLines = flowLines(data["关键价位"], num((data["报价"] || {})["价格"]));
+  planLines.forEach(l => points.push(l.v));
   if (!points.length) {
     ctx.fillStyle = C.text;
     ctx.font = "12px system-ui, sans-serif";
@@ -84,22 +79,17 @@ export function drawFlowMinutes(canvas, data) {
   ctx.fillStyle = C.bg; ctx.fillRect(padL, padT, plotW, plotH);
   /* 只保留分时线 + 买卖线（批注 1）：均价线、计划线、昨收虚线都不画，避免线条与文字重叠 */
   seg(prices, C.price, 1.6);
-  /* 买卖线（批注 1/4）：每笔成交按成交价画一条**贯穿全宽**的水平线（买=红、卖=绿），
-     标签放在右端，避免与左侧价格刻度、曲线重叠。 */
-  const today = data["分时日期"];
-  (data["成交"] || []).forEach(f => {
-    const i = fillIndex(times, f["日期"], today, f["时间"]);
-    const price = num(f["价格"]);
-    if (i === null || price === null) return;
-    const buy = String(f["方向"] || "") === "买入";
-    const cy = y(price);
+  /* 交易计划里的操作买卖线（用户口径）：买点 / 减仓 / 止损 / 止盈点各一条整宽水平线，
+     标签放右端；同价的多条操作合并成一条（如「买点·止盈点 8.220」）。 */
+  planLines.forEach(l => {
+    const cy = y(l.v);
     ctx.save();
-    ctx.strokeStyle = buy ? C.buy : C.sell;
-    ctx.lineWidth = 1.4;
-    ctx.beginPath(); ctx.moveTo(padL, cy); ctx.lineTo(padL + plotW, cy); ctx.stroke();  // 整宽买卖线
-    ctx.fillStyle = buy ? C.buy : C.sell;
+    ctx.strokeStyle = l.color;
+    ctx.lineWidth = 1.3;
+    ctx.beginPath(); ctx.moveTo(padL, cy); ctx.lineTo(padL + plotW, cy); ctx.stroke();
+    ctx.fillStyle = l.color;
     ctx.font = "11px system-ui, sans-serif";
-    ctx.fillText((buy ? "买 " : "卖 ") + fmt(price, 3), padL + plotW + 6, cy + 4);
+    ctx.fillText(l.label + " " + fmt(l.v, 3), padL + plotW + 6, cy + 4);
     ctx.restore();
   });
   ctx.fillStyle = C.text; ctx.font = "11px system-ui, sans-serif";

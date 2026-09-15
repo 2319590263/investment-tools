@@ -297,7 +297,7 @@ function targetBody(t, tools) {
   html += '<div class="sec-title">当前计划的关键价位（精确价 + 手数）</div>' +
     trackLevelsHtml({价格: pnl["现价"]}, t["关键价位"], lots);
   /* 分时图：买卖点标在成交价上，计划线用同一份 planprices.js 收敛（批注 1）。 */
-  html += '<div class="sec-title">当日分时（买卖线）' +
+  html += '<div class="sec-title">当日分时（交易计划的操作买卖线）' +
     '<button class="btn sm ghost fl-min-refresh" data-act="minutes" data-code="' + esc(code) +
     '">刷新分时</button></div>' +
     '<div class="fl-chart-box"><canvas class="fl-chart" data-chart-code="' + esc(code) + '"></canvas>' +
