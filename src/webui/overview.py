@@ -182,7 +182,8 @@ def build_overview(refresh=False):
     rank = pickrank.build_rank({aiplan.code6(r.get("代码")) for r in hold_rows},
                                {aiplan.code6(w.get("代码")) for w in watch})
     active_flows = flow.list_flows(active_only=True)
-    flow_codes = [aiplan.code6((d.get("标的") or {}).get("代码") or "") for d in active_flows]
+    flow_codes = [aiplan.code6((n or {}).get("代码") or "")
+                  for d in active_flows for n in flow.targets(d)]
     codes = ([r.get("代码") for r in hold_rows] + [w.get("代码") for w in watch] +
              [row.get("代码") for row in rank.get("行") or []] + flow_codes)
     quote_map = {}

@@ -60,6 +60,21 @@ def calendar_days():
     return _CAL_CACHE["days"]
 
 
+def cost_of(provider, model, usage, cfg=None, default_fx=7.1):
+    """按 aiplan 的口径算费用。
+
+    aiplan.compute_cost 的第 4 个参数是**汇率数字**（USD → CNY），不是「汇率」字典：
+    传成字典在 USD 计费的 provider 上会直接 TypeError（float * dict），CNY 计费的 provider
+    因为用不到该参数而掩盖这个错误。所有网页端调用都走这里，避免再踩。
+    """
+    fx = ((cfg or {}).get("汇率") or {}).get("USD_CNY")
+    try:
+        fx = float(fx) if fx not in (None, "") else float(default_fx)
+    except (TypeError, ValueError):
+        fx = float(default_fx)
+    return aiplan.compute_cost(provider, model, usage or {}, fx)
+
+
 def session_of(now=None):
     """当前时段：名称复用 pan.session_name()，是否交易日用本地日历校正。"""
     now = now or datetime.now()
@@ -661,7 +676,7 @@ def plancheck_call_model(log, opts, cfg, data, fact):
     if not res.get("ok"):
         raise RuntimeError("模型调用失败：%s" % res.get("error"))
     usage = res.get("usage") or {}
-    cost = aiplan.compute_cost(provider, model, usage, cfg.get("汇率") or {})
+    cost = cost_of(provider, model, usage, cfg)
     obj, perr = aiplan.extract_json(res.get("text"))
     log("[OK] 模型返回 %d 字符 ｜ latency %sms" % (len(res.get("text") or ""), res.get("latency_ms")))
     log("[OK] usage in %s / out %s ｜ 费用 %s"

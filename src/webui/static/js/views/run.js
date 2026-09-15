@@ -299,6 +299,7 @@ export async function stopJob() {
 }
 
 export function checkRunReadiness() {
+  syncOverrideHint();
   const el = $("#code-hint");
   if (!el) return;
   const codes = pickedCodes();
@@ -325,6 +326,23 @@ export function checkRunReadiness() {
     (cached.length ? "当前数据缓存含：" + cached.join("、") : "");
 }
 
+/* 覆盖模型与 Key 的防呆：填了就会盖掉配置里的 Key（这是 401 最常见的来源） */
+export function syncOverrideHint() {
+  const el = $("#override-hint");
+  if (!el) return;
+  const key = (($("#api-key") || {}).value || "").trim();
+  const base = (($("#api-base") || {}).value || "").trim();
+  const bits = [];
+  if (key) bits.push("API Key（尾号 " + key.slice(-4) + "）");
+  if (base) bits.push("API Base（" + base + "）");
+  if (!bits.length) { el.hidden = true; el.textContent = ""; return; }
+  el.hidden = false;
+  el.innerHTML = "⚠ 本次会用你填的 " + esc(bits.join(" 和 ")) +
+    "：它**优先于**模型配置与环境变量里的 Key，填错就会直接 401 invalid api key。" +
+    "想用配置里的 key 就把这里清空（「模型配置」页能看到当前 key 的来源与掩码）。";
+}
+
+
 export function showDiagnose(text) {
   const el = $("#run-diagnose");
   if (!el) return;
@@ -342,6 +360,10 @@ export function initRunView() {
   ["#code", "#date", "#top", "#maxchars", "#profile", "#model-pro", "#model-review"].forEach(sel => {
     const el = $(sel);
     if (el) el.addEventListener("input", syncRunCmd);
+  });
+  ["#api-key", "#api-base"].forEach(sel => {
+    const el = $(sel);
+    if (el) el.addEventListener("input", syncOverrideHint);
   });
   ["#opt-no-fetch"].forEach(sel => {
     const el = $(sel);

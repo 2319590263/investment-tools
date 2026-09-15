@@ -6,6 +6,7 @@ import copy
 import json
 import os
 import time
+from .plancheck import cost_of
 
 from .archive import save_pick
 from .paths import MODELS_PATH, PAN_DIR, aiplan, atomic_write, pan, rel
@@ -445,7 +446,7 @@ def pick_call_model(log, opts, cfg, pandoc, fact):
         raise RuntimeError("模型调用失败：%s" % r.get("error"))
     obj, perr = aiplan.extract_json(r.get("text"))
     usage = r.get("usage") or {}
-    cost = aiplan.compute_cost(provider, model, usage, cfg.get("汇率") or {})
+    cost = cost_of(provider, model, usage, cfg)
     log("[..] 模型返回 %d 字符 ｜ latency %sms"
         % (len(r.get("text") or ""), r.get("latency_ms")))
     log("[OK] usage in %s / out %s ｜ 费用 %s"

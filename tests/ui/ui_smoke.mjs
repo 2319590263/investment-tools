@@ -350,11 +350,21 @@ await page.waitForSelector("#btn-flow-create", { timeout: 20000 }).catch(() => {
 for (const sel of ["#flow-list", "#btn-flow-create", "#btn-flow-poll", "#flow-interval",
                    "#flow-band", "#flow-console", "#flow-detail", "#btn-flow-plan",
                    "#btn-flow-check", "#nav-flow-badge", "#track-table", "#btn-track-generate",
-                   "#btn-track-add", "#btn-track-import", "#btn-track-quotes"]) {
+                   "#btn-track-add", "#btn-track-import", "#btn-track-quotes",
+                   "#flow-new-capital", "#flow-new-target", "#flow-new-loss", "#flow-new-style",
+                   "#flow-new-code", "#flow-new-alloc"]) {
   const found = await page.locator(sel).count();
   console.log(`${found > 0 ? "PASS" : "FAIL"}  交易流页控件 ${sel}`);
   if (!found) failed++;
 }
+/* 开流表单：打法三选一、没有「最多加仓」栏（它已按需求删掉） */
+const styleOpts = await page.locator("#flow-new-style option").allInnerTexts().catch(() => []);
+const styleOk = ["超短线", "短线", "波段"].every(s => styleOpts.includes(s));
+console.log(`${styleOk ? "PASS" : "FAIL"}  开流表单打法三选一（${styleOpts.join("/")}）`);
+if (!styleOk) failed++;
+const hasAdds = await page.locator("#flow-new-adds").count();
+console.log(`${hasAdds === 0 ? "PASS" : "FAIL"}  开流表单已无「最多加仓」栏`);
+if (hasAdds !== 0) failed++;
 await page.waitForFunction(() => {
   const box = document.querySelector("#flow-list");
   return box && (box.querySelector(".flow-card") || box.querySelector(".empty"));
@@ -364,6 +374,19 @@ const flowText = await page.locator("#flow-list").innerText().catch(() => "");
 const flowOk = flowCards > 0 || /还没有交易流/.test(flowText);
 console.log(`${flowOk ? "PASS" : "FAIL"}  交易流卡区渲染（${flowCards} 条流）`);
 if (!flowOk) failed++;
+if (flowCards > 0) {
+  /* 卡片里要有标的表 + 加标的表单（打法下拉三档） */
+  const addBoxes = await page.locator("#flow-list .flow-card details.fl-add").count();
+  console.log(`${addBoxes === flowCards ? "PASS" : "FAIL"}  每条流都有「添加标的」表单`);
+  if (addBoxes !== flowCards) failed++;
+  const rowAdds = await page.locator("#flow-list .flow-card details.fl-add [data-add='style'] option")
+    .count();
+  console.log(`${rowAdds >= flowCards * 3 ? "PASS" : "FAIL"}  加标的打法下拉（${rowAdds} 个选项）`);
+  if (rowAdds < flowCards * 3) failed++;
+  const targetTables = await page.locator("#flow-list .flow-card table.fl-targets").count();
+  console.log(`${targetTables >= 1 ? "PASS" : "FAIL"}  流卡片里有标的表`);
+  if (targetTables < 1) failed++;
+}
 const bandOptions = await page.locator("#flow-band option").count();
 console.log(`${bandOptions >= 3 ? "PASS" : "FAIL"}  接近带档位（${bandOptions} 档）`);
 if (bandOptions < 3) failed++;
@@ -374,6 +397,9 @@ if (flowCards > 0) {
   const hasBlocks = /补录成交/.test(detail) && /体检记录/.test(detail) && /事件时间线/.test(detail);
   console.log(`${hasBlocks ? "PASS" : "FAIL"}  流详情含成交录入 / 体检 / 事件时间线`);
   if (!hasBlocks) failed++;
+  const tabs = await page.locator("#flow-detail [data-tab]").count();
+  console.log(`${tabs > 0 ? "PASS" : "FAIL"}  流详情有标的页签（${tabs} 只）`);
+  if (!tabs) failed++;
 } else {
   console.log("INFO  还没有交易流，跳过详情断言（开流表单已在上面断言）");
 }
@@ -412,6 +438,21 @@ for (const sel of ["#btn-code-add", "#code-picked", "#btn-code-clear"]) {
   console.log(`${found > 0 ? "PASS" : "FAIL"}  运行页多选控件 ${sel}`);
   if (!found) failed++;
 }
+/* 覆盖 Key 的防呆提示：填了值要红字提醒 */
+await page.evaluate(() => {
+  document.querySelectorAll("#view-run details.adv").forEach(d => { d.open = true; });
+});
+await page.waitForTimeout(300);
+await page.fill("#api-key", "test-only");
+await page.waitForTimeout(200);
+const hintShown = await page.locator("#override-hint").isVisible().catch(() => false);
+console.log(`${hintShown ? "PASS" : "FAIL"}  填了 --api-key 会提示「覆盖配置」`);
+if (!hintShown) failed++;
+await page.fill("#api-key", "");
+await page.waitForTimeout(200);
+const hintHidden = await page.locator("#override-hint").isVisible().catch(() => true);
+console.log(`${!hintHidden ? "PASS" : "FAIL"}  清空 --api-key 后提示消失`);
+if (hintHidden) failed++;
 await page.fill("#code", "512890");
 await page.press("#code", "Enter");
 await page.fill("#code", "002463");

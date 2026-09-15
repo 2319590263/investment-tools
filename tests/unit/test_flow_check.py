@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """体检（意外排查）：事实包组装、消息面缺失标注、四档结论兜底、run_check 记账。
 
-全打桩，不联网、不调模型、不写用户数据。
+交易流里一条流可以有多只标的，所以体检、事实包、计划都作用在「标的节点」上
+（用 self.node 表示）；全部打桩，不联网、不调模型、不写用户数据。
 """
 
 import os
@@ -37,31 +38,39 @@ class Fixture(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.f = import_module("flow")
+        cls.fb = import_module("flowbook")
         cls.fr = import_module("flow_run")
 
     def setUp(self):
         self.tmp = tempfile.mkdtemp(prefix="flowchk_")
         self.addCleanup(shutil.rmtree, self.tmp, True)
-        for obj, name, value in ((self.f, "FLOW_DIR", os.path.join(self.tmp, "flows")),
-                                 (self.f, "FLOW_SETTINGS", os.path.join(self.tmp, "flows", "s.json")),
-                                 (self.f, "TRASH_DIR", os.path.join(self.tmp, "trash")),
-                                 (self.f, "LEDGER_PATH", os.path.join(self.tmp, "台账.md"))):
-            p = mock.patch.object(obj, name, value)
-            p.start()
-            self.addCleanup(p.stop)
+        # 路径常量分别落在 flow（流文件 / 回收站）与 flowbook（设置 / 台账）里，两个都要打桩
+        for mod in (self.f, self.fb):
+            for name, value in (("FLOW_DIR", os.path.join(self.tmp, "flows")),
+                                ("FLOW_SETTINGS", os.path.join(self.tmp, "flows", "s.json")),
+                                ("TRASH_DIR", os.path.join(self.tmp, "trash")),
+                                ("LEDGER_PATH", os.path.join(self.tmp, "台账.md"))):
+                if hasattr(mod, name):
+                    p = mock.patch.object(mod, name, value)
+                    p.start()
+                    self.addCleanup(p.stop)
         self.f._FLOW_CACHE.clear()
-        doc, err = self.f.create_flow("600967", "内蒙一机", 30000, 15, 8, account_total=50000)
+        doc, err = self.f.create_flow(capital=30000, target_pct=15, loss_pct=8, code="600967",
+                                      name="内蒙一机", alloc=30000, style="短线",
+                                      account_total=50000)
         self.assertIsNone(err)
-        self.f.add_fill(doc, "买入", 13.9, 2000, account={"佣金费率_pct": 0.025, "佣金最低_元": 5,
-                                                        "印花税率_pct": 0.05, "过户费率_pct": 0.001})
-        self.f.apply_price(doc, 14.0)
-        doc["计划"] = {"产物路径": "data/ai/track/x.json", "生成时间": "2026-09-14 15:20:00",
-                       "适用交易日": "2026-09-15", "方向": "偏多", "置信度": 60,
-                       "一句话结论": "回踩建仓",
-                       "条目": [{"编号": 1, "动作": "建仓", "触发条件": "缩量企稳",
-                                 "价格区间": [13.4, 14.0], "股数": 300, "失效条件": "跌破 13.0"}],
-                       "关键价位": {"止损": 13.0, "目标": [{"价位": 15.22}],
-                                  "支撑": [], "压力": []}}
+        self.node = self.f.find_target(doc, "600967")[0]
+        self.f.add_fill(self.node, "买入", 13.9, 2000,
+                        account={"佣金费率_pct": 0.025, "佣金最低_元": 5,
+                                 "印花税率_pct": 0.05, "过户费率_pct": 0.001})
+        self.f.apply_price(self.node, 14.0)
+        self.node["计划"] = {"产物路径": "data/ai/track/x.json", "生成时间": "2026-09-14 15:20:00",
+                             "适用交易日": "2026-09-15", "方向": "偏多", "置信度": 60,
+                             "一句话结论": "回踩建仓",
+                             "条目": [{"编号": 1, "动作": "建仓", "触发条件": "缩量企稳",
+                                       "价格区间": [13.4, 14.0], "股数": 300, "失效条件": "跌破 13.0"}],
+                             "关键价位": {"止损": 13.0, "目标": [{"价位": 15.22}],
+                                        "支撑": [], "压力": []}}
         self.f.save_flow(doc)
         self.doc = doc
 
@@ -69,14 +78,24 @@ class Fixture(unittest.TestCase):
 class TestFactpack(Fixture):
 
     def test_state_lines(self):
-        text = self.fr.flow_state_lines(self.doc)
-        self.assertIn("本流资金 30000.00 元", text)
+        text = self.fr.flow_state_lines(self.doc, self.node)
+        self.assertIn("流资金 30000.00 元", text)
         self.assertIn("目标收益率 15.00%", text)
         self.assertIn("最大亏损 8.00%", text)
+        self.assertIn("打法：短线", text)
+        self.assertIn("分配资金 30000.00 元", text)
         self.assertIn("成交明细（权威口径", text)
         self.assertIn("买入", text)
         self.assertIn("平均成本", text)
         self.assertIn("目标进度", text)
+
+    def test_state_lines_show_same_flow_siblings(self):
+        self.f.set_target(self.doc, "600967", alloc=20000)
+        self.f.add_target(self.doc, "300563", "神宇股份", alloc=10000, style="波段")
+        text = self.fr.flow_state_lines(self.doc, self.node)
+        self.assertIn("同一条流里的其他标的", text)
+        self.assertIn("神宇股份", text)
+        self.assertIn("波段", text)
 
     def test_news_text_lists_notices_and_degrade(self):
         text = self.fr._news_text(NEWS, "data/stock3d_20260913.json", "2026-09-13")
@@ -97,14 +116,15 @@ class TestFactpack(Fixture):
               "板块": {"行业领涨": [{"名称": "军工"}]},
               "大盘": {"上涨占比_pct": 40.0}}
         brief = {"价格": 14.0, "来源": "东财实时行情", "时间": "10:31:02"}
-        fact = self.fr.check_factpack(self.doc, NEWS, bg, brief, "听说董事长变更",
-                                       "data/stock3d_20260913.json", "2026-09-13", 14.0)
+        fact = self.fr.check_factpack(self.doc, self.node, NEWS, bg, brief, "听说董事长变更",
+                                      "data/stock3d_20260913.json", "2026-09-13", 14.0)
         for title in ("体检对象与交易流状态", "当前交易计划原文", "消息面（stock3d）",
                       "个股量价与形态", "板块", "大盘", "用户手填的观察与异常"):
             self.assertIn("【%s】" % title, fact)
         self.assertIn("听说董事长变更", fact)
         self.assertIn("董事会第十一次会议", fact)
-        small = self.fr.check_factpack(self.doc, NEWS, bg, brief, "", None, None, 14.0, cap=1200)
+        small = self.fr.check_factpack(self.doc, self.node, NEWS, bg, brief, "", None, None,
+                                       14.0, cap=1200)
         self.assertIn("预算裁剪", small)
         self.assertIn("消息面（stock3d）", small)
         self.assertNotIn("【大盘】", small)
@@ -116,6 +136,13 @@ class TestFactpack(Fixture):
         self.assertEqual(out["结论"], "建议作废重算")
         self.assertEqual(out["逐条依据"], ["只有一条"])
         self.assertEqual(self.fr.normalize_check(None), None)
+
+    def test_plan_prompt_carries_style(self):
+        text = self.fr.plan_prompt("超短线")
+        self.assertIn("超短线", text)
+        self.assertIn("1-3 个交易日", text)
+        self.assertIn("交易流补充要求", text)
+        self.assertIn("波段", self.fr.plan_prompt("波段"))
 
 
 class TestRunCheck(Fixture):
@@ -142,12 +169,15 @@ class TestRunCheck(Fixture):
                 mock.patch.object(self.fr, "_call_check", lambda log, s, fact, ctl: (block["json"], block)), \
                 mock.patch.object(self.fr.alerts_store, "append", lambda items: sent.extend(items)):
             out = self.fr.run_check(lambda m: None, {}, {"流编号": self.doc["流编号"],
+                                                          "代码": ["600967"],
                                                           "补充说明": "看到问询函"})
         self.assertEqual(out["结论"], "暂停新动作")
+        self.assertEqual(out["代码"], "600967")
         doc, _err = self.f.load_flow(self.doc["流编号"])
-        self.assertEqual(len(doc["体检"]), 1)
-        self.assertEqual(doc["体检"][0]["补充说明"], "看到问询函")
-        self.assertTrue(any(e["类型"] == "体检" for e in doc["事件"]))
+        node = self.f.find_target(doc, "600967")[0]
+        self.assertEqual(len(node["体检"]), 1)
+        self.assertEqual(node["体检"][0]["补充说明"], "看到问询函")
+        self.assertTrue(any(e["类型"] == "体检" for e in node["事件"]))
         self.assertEqual(sent[0]["点位类型"], "体检")
         self.assertEqual(sent[0]["级别"], "warn")
 
@@ -165,12 +195,21 @@ class TestRunCheck(Fixture):
                 mock.patch.object(self.fr, "_call_check",
                                   lambda log, s, fact, ctl: (None, {"error": "模型调用失败：连接被拒"})), \
                 mock.patch.object(self.fr.alerts_store, "append", lambda items: None):
-            out = self.fr.run_check(lambda m: None, {}, {"流编号": self.doc["流编号"]})
+            out = self.fr.run_check(lambda m: None, {}, {"流编号": self.doc["流编号"],
+                                                          "代码": ["600967"]})
         self.assertEqual(out["结论"], "未判定")
         self.assertIn("连接被拒", out["error"])
         doc, _err = self.f.load_flow(self.doc["流编号"])
-        self.assertEqual(doc["体检"][0]["结论"], "未判定")
-        self.assertTrue(doc["体检"][0]["事实包字符数"] > 0, "失败也要留下事实包大小")
+        node = self.f.find_target(doc, "600967")[0]
+        self.assertEqual(node["体检"][0]["结论"], "未判定")
+        self.assertTrue(node["体检"][0]["事实包字符数"] > 0, "失败也要留下事实包大小")
+
+    def test_run_check_needs_code_when_flow_has_many_targets(self):
+        self.f.set_target(self.doc, "600967", alloc=20000)
+        self.f.add_target(self.doc, "300563", "神宇股份", alloc=10000)
+        with self.assertRaises(RuntimeError) as ctx:
+            self.fr.run_check(lambda m: None, {}, {"流编号": self.doc["流编号"]})
+        self.assertIn("体检要指明", str(ctx.exception))
 
 
 if __name__ == "__main__":

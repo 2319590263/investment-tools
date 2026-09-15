@@ -418,39 +418,49 @@ function pickModuleButtons(facets) {
   }).join("");
 }
 
-/* 总控台的交易流卡区：同一次批量报价 + 同一套机械判定（不调模型）。 */
+/* 总控台的交易流卡区：一行 = 一只标的（同一次批量报价 + 同一套机械判定，不调模型）。 */
 export function renderFlows(block, rf) {
   const box = $("#console-flow");
   if (!box) return;
   const rows = block["行"] || [];
+  const cnt = block["计数"] || {};
   const sum = $("#console-flow-sum");
   if (sum) {
-    const n = (block["计数"] || {})["进行中"] || 0;
-    sum.textContent = n ? ("在跑 " + n + " 条 · 占用 " + fmtMoney(block["合计资金"], 0) + " 元")
-                        : "还没有在跑的交易流";
+    const n = cnt["进行中"] || 0;
+    sum.textContent = n
+      ? ("在跑 " + n + " 条流 · " + (cnt["标的"] || 0) + " 只标的 · 流资金 " +
+         fmtMoney(block["合计资金"], 0) + " 元（分配 " + fmtMoney(block["分配合计"], 0) + " 元）")
+      : "还没有在跑的交易流";
   }
   const src = $("#console-flow-src");
   if (src) src.textContent = (rf && rf["模式"] === "实时" ? "实时口径 ｜ " : "") + (block["口径"] || "");
   const hint = $("#console-flow-hint");
   if (hint) {
     const pending = block["待重算"] || [];
-    hint.textContent = pending.length ? ("今日盘后还没重算计划：" + pending.join("、") + "（去交易流页一键重算）") : "";
+    hint.textContent = pending.length
+      ? ("今日盘后还没重算计划：" + pending.map(x => x["标签"] || x["流编号"]).join("；") +
+         "（去交易流页一键重算）")
+      : "";
   }
   if (!rows.length) {
-    box.innerHTML = '<div class="muted">还没有交易流：去「交易流」页开一条（填本流资金、目标收益率、最大亏损），' +
-      "就会生成首份计划并从建仓一路盯到清仓。</div>";
+    box.innerHTML = '<div class="muted">还没有交易流：去「交易流」页开一条（填流资金、目标收益率、最大亏损），' +
+      "再往流里加标的（每只选一种打法），就会按打法生成计划并从建仓一路盯到清仓。</div>";
     return;
   }
   let html = '<div class="table-wrap" style="max-height:320px"><table class="tbl"><thead><tr>' +
-    "<th>标的</th><th>状态</th><th class='num'>现价</th><th class='num'>合计盈亏</th>" +
-    "<th class='num'>收益率</th><th>下一步</th><th>到价</th><th>操作</th></tr></thead><tbody>";
+    "<th>流 / 标的</th><th>打法</th><th>状态</th><th class='num'>现价</th>" +
+    "<th class='num'>合计盈亏</th><th class='num'>收益率</th><th>下一步</th><th>到价</th>" +
+    "<th>操作</th></tr></thead><tbody>";
   rows.forEach(c => {
     const pnl = c["盈亏"] || {};
     const marks = c["到价"] || [];
     const stale = (c["待重算"] || {})["待重算"];
     html += "<tr>" +
-      "<td><b>" + esc((c["标的"] || {})["名称"] || "") + "</b>" +
-        '<div class="mono muted">' + esc((c["标的"] || {})["代码"] || "") + "</div></td>" +
+      "<td>" + '<div class="mono muted">' + esc(c["流编号"] || "") + "</div>" +
+        "<b>" + esc((c["标的"] || {})["名称"] || "") + "</b>" +
+        '<span class="mono muted"> ' + esc((c["标的"] || {})["代码"] || "") + "</span></td>" +
+      "<td>" + chip(c["打法"] || "—", "accent") +
+        '<div class="muted">分配 ' + fmtMoney(c["分配资金"], 0) + "</div></td>" +
       "<td>" + chip(c["状态"] || "—", c["状态"] === "进行中" ? "accent" : "flat") +
         (stale ? chip("待重算", "warn") : "") + "</td>" +
       '<td class="num">' + (pnl["现价"] == null ? "—" : fmt(pnl["现价"], 3)) + "</td>" +
@@ -459,12 +469,13 @@ export function renderFlows(block, rf) {
       '<td class="wrap muted">' + esc(c["下一步"] || "") + "</td>" +
       "<td>" + marks.slice(0, 2).map(m =>
         chip(m["类型"], m["级别"] === "bad" ? "bad" : (m["级别"] === "ok" ? "ok" : "warn"))).join("") + "</td>" +
-      "<td><button class='btn sm ghost' data-flow-open='" + esc(c["流编号"]) + "'>详情</button></td></tr>";
+      "<td><button class='btn sm ghost' data-flow-open='" + esc(c["流编号"]) +
+        "' data-code='" + esc((c["标的"] || {})["代码"] || "") + "'>详情</button></td></tr>";
   });
   box.innerHTML = html + "</tbody></table></div>";
   $$("#console-flow [data-flow-open]").forEach(b => b.addEventListener("click", () => {
     const target = viewApi("flow");
-    if (target.openDetail) target.openDetail(b.dataset.flowOpen, false);
+    if (target.openDetail) target.openDetail(b.dataset.flowOpen, false, b.dataset.code);
     showView("flow");
   }));
 }

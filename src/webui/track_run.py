@@ -11,6 +11,7 @@ import copy
 from . import background
 from . import quotes as quotes_mod
 from . import track
+from .plancheck import cost_of
 from .paths import MODELS_PATH, aiplan, now_str, num, rel
 from .store import load_account_bundle, load_holdings_bundle, load_tracklist
 
@@ -102,7 +103,7 @@ def call_plan(log, s, fact, ctl, system=None, prompt=None):
         return None, block
     usage = res.get("usage") or {}
     block["usage"] = usage
-    block["cost"] = aiplan.compute_cost(provider, s["model"], usage, s["cfg"].get("汇率") or {})
+    block["cost"] = cost_of(provider, s["model"], usage, s["cfg"])
     block["latency_ms"] = res.get("latency_ms")
     block["ok"] = bool(res.get("ok"))
     text = res.get("text") or ""
@@ -159,7 +160,7 @@ def call_review(log, s, fact, plan_obj, raw_text, ctl):
         obj = aiplan.normalize_review(obj)
     block = {"called": True, "role": "复核", "model": model, "ok": bool(res.get("ok")),
              "usage": usage,
-             "cost": aiplan.compute_cost(provider, model, usage, s["cfg"].get("汇率") or {}),
+             "cost": cost_of(provider, model, usage, s["cfg"]),
              "json": obj, "parse_error": perr,
              "raw_text": "" if obj is not None else (res.get("text") or "")[:20000],
              "error": None if obj is not None else ("复核档调用失败：%s" % (res.get("error") or "未知")

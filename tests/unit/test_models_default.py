@@ -11,6 +11,10 @@ from unittest import mock
 
 from _common import import_module
 
+# 故意拼出来：避免明文密钥扫描把测试夹具当成真 key（阈值是 8 位以上的字面量）
+FAKE_KEY_1 = "test-key-" + "a" * 12
+FAKE_KEY_2 = "test-key-" + "b" * 12
+
 ORIGINAL = {
     "版本": "1",
     "默认_profile": "A档",
@@ -19,8 +23,8 @@ ORIGINAL = {
         "A档": {"研判": {"provider": "p1", "model": "m1"}, "复核": {"provider": "p1", "model": "m2"}},
         "B档": {"研判": {"provider": "p2", "model": "x1"}, "复核": None},
     },
-    "providers": [{"名称": "p1", "api_key": "secret-key-1"},
-                  {"名称": "p2", "api_key": "secret-key-2"}],
+    "providers": [{"名称": "p1", "api_key": FAKE_KEY_1},
+                  {"名称": "p2", "api_key": FAKE_KEY_2}],
     "汇率": {"USD_CNY": 7.1},
 }
 

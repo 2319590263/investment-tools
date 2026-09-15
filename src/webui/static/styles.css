@@ -599,7 +599,7 @@ input.inline-input:focus { outline: none; border-color: var(--accent); }
 #track-table input[type="checkbox"] { cursor: pointer; }
 
 /* ---- 交易流 ---- */
-.flow-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 12px; }
+.flow-grid { display: grid; grid-template-columns: 1fr; gap: 12px; }
 .flow-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
   background: var(--panel-2); display: flex; flex-direction: column; gap: 6px; }
 .fl-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -621,6 +621,15 @@ input.inline-input:focus { outline: none; border-color: var(--accent); }
 .fl-events { display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; max-height: 260px; overflow: auto; }
 #flow-detail { max-height: 720px; overflow: auto; }
 #flow-list .empty { padding: 14px 4px; }
+.fl-targets { font-size: 12.5px; }
+.fl-targets th, .fl-targets td { vertical-align: top; }
+.fl-targets a { color: var(--accent); font-size: 12px; }
+.fl-row-act { display: flex; flex-direction: column; gap: 4px; align-items: stretch; }
+.fl-add { margin-top: 6px; font-size: 12.5px; }
+.fl-add summary { cursor: pointer; color: var(--text-2); }
+.fl-add summary:hover { color: var(--text); }
+.fl-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 8px; }
+.fl-tab-bodies { display: flex; flex-direction: column; gap: 6px; }
 
 /* ---- 运行页：多选标的 ---- */
 .code-picked { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }

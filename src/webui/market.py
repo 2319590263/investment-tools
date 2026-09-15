@@ -5,6 +5,7 @@ import copy
 import json
 import os
 import sys
+from .plancheck import cost_of
 
 from .archive import list_reports, plan_log_entries
 from .paths import (HISTORY_DIR, MARKET_DIR, MODELS_PATH, PHASES, PHASE_LABEL, POOL_PATH,
@@ -357,7 +358,7 @@ def run_market_forecast(log, profile=None, model_pro=None, api_base=None, api_ke
     log("[..] 模型返回 %d 字符 ｜ latency %sms"
         % (len(r.get("text") or ""), r.get("latency_ms")))
     usage = r.get("usage") or {}
-    cost = aiplan.compute_cost(provider, model, usage, cfg.get("汇率") or {})
+    cost = cost_of(provider, model, usage, cfg)
     log("[OK] usage in %s / out %s ｜ 费用 %s"
         % (usage.get("输入"), usage.get("输出"),
            cost.get("人民币_估算") if cost.get("人民币_估算") is not None else "未配置单价（仅记录 token）"))

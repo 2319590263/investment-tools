@@ -163,7 +163,9 @@
 
         <div class="card" id="flow-new-card">
           <div class="card-h"><span>开新流</span>
-            <span class="muted">一只标的、一笔专用资金、一个目标收益率与最大亏损 → 从建仓盯到清仓</span></div>
+            <span class="muted">一笔流资金 + 一个目标收益率 + 一个最大亏损 → 开好之后往里加标的，每只选一种打法</span>
+            <div class="spacer"></div>
+            <span class="muted">一只标的只属于一条流；流内所有标的的分配资金之和不能超过流资金</span></div>
           <div class="card-b" id="flow-new"></div>
         </div>
 
@@ -290,6 +292,7 @@
                     <input id="api-key" type="password" placeholder="留空则按 环境变量 → 配置 → token.txt" /></div>
                   <div class="field"><label>API Base <span class="muted">--api-base，排障用</span></label>
                     <input id="api-base" placeholder="留空用 provider 配置" /></div>
+                  <div class="err" id="override-hint" hidden></div>
                 </div>
               </details>
             </div>

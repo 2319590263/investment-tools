@@ -10,8 +10,9 @@ import { api } from "../core/api.js";
 import { createPoller, INTERVALS, loadPref, savePref } from "../core/poller.js";
 import { openReport, registerView } from "../core/app.js";
 import { $, $$, esc, toast } from "../core/util.js";
-import { confirmModal, openModal } from "../ui/modal.js";
-import { flowCardsHtml, flowDetailHtml, flowFormHtml } from "../ui/flowcards.js";
+import { closeModal, confirmModal, openModal } from "../ui/modal.js";
+import { closedLine, flowCardsHtml, flowDetailHtml, flowFormHtml, paramsFormHtml,
+         targetFormHtml } from "../ui/flowcards.js";
 import { trackDetailHtml, trackListHtml } from "../ui/trackcards.js";
 
 export const Flow = {list: null, detail: null, fid: null, settings: null, day: "",
@@ -101,24 +102,16 @@ export function initPoller() {
 
 /* ---------------- 流列表 ---------------- */
 
-function syncChecked(cards) {
-  const codes = (cards || []).map(c => ((c["标的"] || {})["代码"] || "").slice(0, 6));
-  if (Flow.checked === null) { Flow.checked = new Set(); return; }
-  codes.forEach(c => { if (!c) return; });
-}
-
 export function renderFlows() {
   const data = Flow.list || {};
   Flow.settings = data["设置"] || Flow.settings;
-  Flow.day = data["适用交易日"] || "";
   const cards = data["流"] || [];
   $("#flow-list").innerHTML = flowCardsHtml(cards);
   const closed = data["已结束"] || [];
   const closedBox = $("#flow-closed");
   if (closedBox) {
     closedBox.innerHTML = closed.length
-      ? closed.map(c => '<div class="fl-closed" data-fid="' + esc(c["流编号"]) + '">' +
-          stateText(c) + "</div>").join("")
+      ? closed.map(closedLine).join("")
       : '<span class="muted">还没有结束的流</span>';
   }
   const s = Flow.settings || {};
@@ -136,45 +129,43 @@ export function renderFlows() {
   if (note) {
     note.textContent = "接近带 " + (s["接近带_pct"] || 0.3) + "% ｜ 轮询 " +
       ((s["轮询间隔_秒"] || 30) + " 秒") + " ｜ 盘后重算 " + (s["盘后重算时间"] || "15:10") +
-      " ｜ 已占用资金 " + (((data["资金"] || {})["已占用"] || 0).toLocaleString()) + " 元";
+      " ｜ 在跑的流资金 " + (((data["资金"] || {})["已占用"] || 0).toLocaleString()) +
+      " 元 ｜ 流内分配 " + (((data["资金"] || {})["分配合计"] || 0).toLocaleString()) +
+      " 元 ｜ 标的 " + (data["标的数"] || 0) + " 只";
   }
   const nudge = $("#flow-nudge");
   const pending = data["待重算"] || [];
   if (pending.length) {
     nudge.hidden = false;
-    $("#flow-nudge-text").textContent = "今日盘后还没重算计划：" + pending.join("、") +
+    $("#flow-nudge-text").textContent = "今日盘后还没重算计划：" +
+      pending.map(x => x["标签"] || x["流编号"]).join("；") +
       "（点右边一键重算；因为服务不常驻，不会无人值守自动跑）";
   } else {
     nudge.hidden = true;
   }
   setBadge(cards, pending);
   if (Flow.settings && Flow.settings["打开页面自动补跑"]) {
-    pending.forEach(fid => { startFlowJob("flow_plan", {流编号: fid}); });
+    pending.forEach(x => startFlowJob("flow_plan", {流编号: x["流编号"], 代码: x["代码"]}));
   }
   renderForm();
-}
-
-function stateText(c) {
-  return "· " + esc((c["标的"] || {})["名称"] || c["流编号"]) + " " +
-    esc(c["状态"] || "") + (c["结束原因"] ? "（" + esc(c["结束原因"]) + "）" : "");
 }
 
 function setBadge(cards, pending) {
   const el = $("#nav-flow-badge");
   if (!el) return;
-  const hit = (cards || []).filter(c => (c["到价"] || []).some(m => m["级别"] === "bad"))
-    .length;
+  const hit = (cards || []).filter(c => (c["标的"] || [])
+    .some(t => (t["到价"] || []).some(m => m["级别"] === "bad"))).length;
   const n = (pending || []).length;
-  if (hit) { el.textContent = "!"; el.hidden = false; el.title = hit + " 条流触及止损/风险位"; }
-  else if (n) { el.textContent = String(n); el.hidden = false; el.title = n + " 条流待重算计划"; }
+  if (hit) { el.textContent = "!"; el.hidden = false; el.title = hit + " 条流里有标的触及止损/风险位"; }
+  else if (n) { el.textContent = String(n); el.hidden = false; el.title = n + " 条流有待重算的计划"; }
   else { el.hidden = true; el.textContent = ""; el.title = ""; }
 }
 
 function renderForm() {
   const box = $("#flow-new");
   if (!box || box.dataset.ready === "1") return;
-  box.innerHTML = flowFormHtml("本流资金 = 这条流专门留给这只标的的钱；目标收益率与最大亏损都按它算。" +
-    "开流后可以随时补录成交、体检、重算计划。");
+  box.innerHTML = flowFormHtml("流资金 = 这条流的总资金；目标收益率与最大亏损都按它算。" +
+    "开流后可以随时往流里加标的（每只选一种打法），也可以改流参数。");
   box.dataset.ready = "1";
   $("#btn-flow-create").addEventListener("click", createFlow);
 }
@@ -200,24 +191,28 @@ export async function loadFlows(refresh) {
 /* ---------------- 开流 ---------------- */
 
 export async function createFlow() {
-  const code = ($("#flow-new-code").value || "").trim();
+  const code = ($("#flow-new-code").value || "").trim().replace(/[^0-9]/g, "").slice(0, 6);
   const capital = $("#flow-new-capital").value;
   const target = $("#flow-new-target").value;
   const loss = $("#flow-new-loss").value;
   $("#flow-msg").textContent = "";
-  if (!code) { $("#flow-msg").textContent = "先填 6 位证券代码"; return; }
   if (!capital || !target || !loss) {
-    $("#flow-msg").textContent = "本流资金 / 目标收益率 / 最大亏损都要填";
+    $("#flow-msg").textContent = "流资金 / 目标收益率 / 最大亏损都要填";
     return;
   }
-  const body = {code: code, name: ($("#flow-new-name").value || "").trim(),
-                "本流资金": capital, "目标收益率_pct": target, "最大亏损_pct": loss,
-                "最大加仓次数": $("#flow-new-adds").value || 2};
-  if ($("#flow-new-bring").checked) {
+  const body = {"流资金": capital, "目标收益率_pct": target, "最大亏损_pct": loss,
+                "备注": ($("#flow-new-note").value || "").trim()};
+  if (code) {
+    body.code = code;
+    body.name = ($("#flow-new-name").value || "").trim();
+    body["打法"] = $("#flow-new-style").value;
+    body["分配资金"] = ($("#flow-new-alloc").value || "").trim() || capital;
+  }
+  if (code && $("#flow-new-bring").checked) {
     try {
       const hold = await api("/api/holdings");
-      const row = (hold["持仓"] || []).find(r => String(r["代码"]) === code.replace(/[^0-9]/g, "").slice(0, 6));
-      if (!row) { $("#flow-msg").textContent = "持仓文件里没有这只标的，去掉「按持仓文件带入」再开"; return; }
+      const row = (hold["持仓"] || []).find(r => String(r["代码"]) === code);
+      if (!row) { $("#flow-msg").textContent = "持仓文件里没有这只标的，去掉「带入底仓」再开"; return; }
       body["起始持仓"] = {"股数": row["持有股数"], "成本价": row["成本价"],
                           "可用": row["可用股数_可卖"]};
     } catch (e) { $("#flow-msg").textContent = e.message; return; }
@@ -229,7 +224,9 @@ export async function createFlow() {
     $("#flow-new-code").value = ""; $("#flow-new-name").value = "";
     await loadFlows(false);
     openFlowDetail(res["流编号"], false);
-    if ($("#flow-new-plan").checked) startFlowJob("flow_plan", {流编号: res["流编号"]});
+    if (code && $("#flow-new-plan").checked) {
+      startFlowJob("flow_plan", {流编号: res["流编号"], 代码: [code]});
+    }
   } catch (e) { $("#flow-msg").textContent = e.message; }
 }
 
@@ -281,15 +278,16 @@ export async function pollFlowJob() {
     } else {
       $("#flow-status").className = "chip " + (r["error"] ? "warn" : "ok");
       $("#flow-status").textContent = kind === "flow_check"
-        ? ("体检完成 · " + (r["结论"] || "—") + " · " + j.elapsed + "s")
-        : ("计划完成 · " + (r["方向"] || "—") + " · " + j.elapsed + "s");
+        ? ("体检完成（" + (r["代码"] || "—") + "）· " + (r["结论"] || "—") + " · " + j.elapsed + "s")
+        : ("计划完成 " + (r["成功"] || 0) + "/" + (r["计划数"] || 0) + " 只 · " + j.elapsed + "s");
       if (kind === "flow_check") {
-        toast("体检结论：" + (r["结论"] || "—") + (r["error"] ? "（模型失败：" + r["error"] + "）" : ""),
+        toast("体检结论（" + (r["代码"] || "—") + "）：" + (r["结论"] || "—") +
+              (r["error"] ? "（模型失败：" + r["error"] + "）" : ""),
               r["error"] ? "bad" : "ok");
       } else if (r["error"]) {
-        toast("计划生成失败：" + r["error"], "bad");
+        toast("计划生成：" + r["error"], "bad");
       } else {
-        toast("计划已生成：" + (r["计划"] || ""), "ok");
+        toast("已生成 " + (r["计划数"] || 0) + " 只标的的计划", "ok");
       }
     }
     await loadFlows(false);
@@ -309,92 +307,214 @@ export async function stopFlowJob() {
 
 /* ---------------- 详情与成交 ---------------- */
 
-export async function openFlowDetail(fid, refresh) {
+export function curTarget() {
+  const d = Flow.detail || {};
+  const list = d["标的"] || [];
+  return list.find(t => t["代码"] === Flow.code) || list[0] || null;
+}
+
+export async function openFlowDetail(fid, refresh, code) {
   Flow.fid = fid;
+  if (code) Flow.code = code;
   try {
-    const d = await api("/api/flow?id=" + encodeURIComponent(fid) + (refresh ? "&refresh=1" : ""));
+    const d = await api("/api/flow?id=" + encodeURIComponent(fid) +
+      (refresh ? "&refresh=1" : "") +
+      (Flow.code ? "&code=" + encodeURIComponent(Flow.code) : ""));
     Flow.detail = d;
+    Flow.code = d["选中"] || Flow.code;
     $("#flow-detail").innerHTML = flowDetailHtml(d);
-    $("#flow-detail-head").textContent = ((d["卡"] || {})["标的"] || {})["名称"] || fid;
-    bindDetail();
+    $("#flow-detail-head").textContent = fid + " · " + (d["标的"] || []).length +
+      " 只标的 ｜ 当前 " + ((curTarget() || {})["名称"] || "—");
   } catch (e) {
     $("#flow-detail").innerHTML = '<div class="fail">读取详情失败：' + esc(e.message) + "</div>";
   }
 }
 
-function bindDetail() {
-  $$("#flow-detail [data-delfill]").forEach(b => b.addEventListener("click", () => deleteFill(b.dataset.delfill)));
-  const add = $("#btn-flow-fill");
-  if (add) add.addEventListener("click", addFill);
-  const sync = $("#btn-flow-sync");
-  if (sync) sync.addEventListener("click", syncLedger);
-  $$("#flow-detail [data-plan]").forEach(a => a.addEventListener("click", e => {
-    e.preventDefault();
-    openReport(a.dataset.plan);
-  }));
+/* 切标的页签：详情接口一次把整条流都给了，切换不发请求。 */
+function switchTab(code) {
+  Flow.code = code;
+  $$("#flow-detail [data-body]").forEach(b => { b.hidden = b.dataset.body !== code; });
+  $$("#flow-detail [data-tab]").forEach(b => {
+    b.className = "btn sm" + (b.dataset.tab === code ? "" : " ghost");
+  });
+  $("#flow-detail-head").textContent = Flow.fid + " · 当前 " +
+    ((curTarget() || {})["名称"] || code);
 }
 
-export async function addFill() {
-  const side = $("#flow-fill-side").value;
-  const price = $("#flow-fill-price").value;
-  const qty = $("#flow-fill-qty").value;
+/* 取某只标的的操作面板：给了 code 就先切到它。 */
+function targetBodyEl(code) {
+  const box = $("#flow-detail");
+  if (!box) return null;
+  if (code && box.querySelector('[data-body="' + code + '"]')) {
+    switchTab(code);
+    return box.querySelector('[data-body="' + code + '"]');
+  }
+  return box.querySelector("[data-body]:not([hidden])");
+}
+
+function targetCardOf(fid, code) {
+  const card = (((Flow.list || {})["流"]) || []).find(c => c["流编号"] === fid);
+  return ((((card || {})["标的"]) || []).find(t => t["代码"] === code)) || {};
+}
+
+export async function addFill(code) {
+  const body = targetBodyEl(code);
+  if (!body) { toast("先在详情里选一只标的", "bad"); return; }
+  const get = k => (body.querySelector('[data-fill="' + k + '"]') || {}).value || "";
+  const side = get("side"), price = get("price"), qty = get("qty");
   if (!price || !qty) { toast("成交价与数量都要填", "bad"); return; }
   try {
     const res = await api("/api/flow/fill", {
       method: "POST",
-      body: JSON.stringify({"流编号": Flow.fid, "方向": side, "价格": price, "数量": qty,
-                            "日期": ($("#flow-fill-day").value || "").trim() || undefined,
-                            "备注": ($("#flow-fill-note").value || "").trim()}),
+      body: JSON.stringify({"流编号": Flow.fid, "代码": code || Flow.code,
+                            "方向": side, "价格": price, "数量": qty,
+                            "日期": get("day").trim() || undefined,
+                            "备注": get("note").trim()}),
     });
     if (!res.ok) { toast(res.error, "bad"); return; }
     toast("已记一笔：" + side + " " + qty + " 股", "ok");
     (res["提示"] || []).forEach(t => toast(t, "warn"));
-    await openFlowDetail(Flow.fid, false);
+    await openFlowDetail(Flow.fid, false, code || Flow.code);
     await loadFlows(false);
   } catch (e) { toast(e.message, "bad"); }
 }
 
-export async function deleteFill(seq) {
+export async function deleteFill(seq, code) {
   confirmModal("删除这笔成交？", "删除后会按剩下的成交重算持仓与盈亏（不会改计划）。", async () => {
     try {
       const res = await api("/api/flow/fill/delete", {
-        method: "POST", body: JSON.stringify({"流编号": Flow.fid, "序号": Number(seq)}),
+        method: "POST",
+        body: JSON.stringify({"流编号": Flow.fid, "代码": code || Flow.code, "序号": Number(seq)}),
       });
       if (!res.ok) { toast(res.error, "bad"); return; }
       toast("已删除成交 #" + seq, "ok");
-      await openFlowDetail(Flow.fid, false);
+      await openFlowDetail(Flow.fid, false, code || Flow.code);
       await loadFlows(false);
     } catch (e) { toast(e.message, "bad"); }
   }, "确认删除");
 }
 
-export async function syncLedger() {
+export async function syncLedger(code) {
   try {
     const res = await api("/api/flow/sync", {
-      method: "POST", body: JSON.stringify({流编号: Flow.fid}),
+      method: "POST", body: JSON.stringify({流编号: Flow.fid, 代码: code || Flow.code}),
     });
     if (!res.ok) { toast(res.error, "bad"); return; }
     toast(res["新增"] ? "从台账并入 " + res["新增"] + " 笔成交" : "台账里没有新成交", res["新增"] ? "ok" : "warn");
-    await openFlowDetail(Flow.fid, false);
+    await openFlowDetail(Flow.fid, false, code || Flow.code);
     await loadFlows(false);
   } catch (e) { toast(e.message, "bad"); }
 }
 
-export async function runCheck(fid, note, pre) {
-  startFlowJob("flow_check", {"流编号": fid, "补充说明": note || "", "先抓": pre || ""});
+export async function runCheck(fid, code, note, pre) {
+  startFlowJob("flow_check", {"流编号": fid, "代码": code ? [code] : [],
+                              "补充说明": note || "", "先抓": pre || ""});
 }
 
-export async function closeFlow(fid) {
-  confirmModal("结束这条流？", "结束后不再盯盘、也不能再补录成交；已经记录的成交与盈亏都会保留。",
+/* ---------------- 加标的 / 改打法 / 改流参数 ---------------- */
+
+export async function addTarget(card) {
+  const box = card.querySelector("details.fl-add");
+  if (!box) return;
+  const msg = box.querySelector("[data-add-msg]");
+  const val = k => (box.querySelector('[data-add="' + k + '"]') || {}).value || "";
+  msg.textContent = "";
+  const code = val("code").trim().replace(/[^0-9]/g, "").slice(0, 6);
+  if (!code) { msg.textContent = "先填 6 位证券代码"; return; }
+  const body = {"流编号": card.dataset.fid, "代码": code,
+                "名称": val("name").trim(), "打法": val("style"),
+                "分配资金": val("alloc").trim()};
+  if (!body["分配资金"]) delete body["分配资金"];
+  if (box.querySelector('[data-add="bring"]').checked) {
+    try {
+      const hold = await api("/api/holdings");
+      const row = (hold["持仓"] || []).find(r => String(r["代码"]) === code);
+      if (!row) { msg.textContent = "持仓文件里没有这只标的，去掉「带入底仓」再加"; return; }
+      body["起始持仓"] = {"股数": row["持有股数"], "成本价": row["成本价"],
+                          "可用": row["可用股数_可卖"]};
+    } catch (e) { msg.textContent = e.message; return; }
+  }
+  try {
+    const res = await api("/api/flow/target/add", {method: "POST", body: JSON.stringify(body)});
+    if (!res.ok) { msg.textContent = res.error; return; }
+    toast("已加入标的 " + code, "ok");
+    await loadFlows(false);
+    await openFlowDetail(card.dataset.fid, false, code);
+  } catch (e) { msg.textContent = e.message; }
+}
+
+export function setTargetDialog(fid, code) {
+  const t = targetCardOf(fid, code);
+  openModal("改打法 / 分配资金", targetFormHtml(code, t));
+  $("#btn-flow-set-save").addEventListener("click", async () => {
+    $("#flow-set-msg").textContent = "";
+    try {
+      const res = await api("/api/flow/target/set", {
+        method: "POST",
+        body: JSON.stringify({"流编号": fid, "代码": code,
+                              "打法": $("#flow-set-style").value,
+                              "分配资金": ($("#flow-set-alloc").value || "").trim()}),
+      });
+      if (!res.ok) { $("#flow-set-msg").textContent = res.error; return; }
+      closeModal();
+      toast("已保存", "ok");
+      await loadFlows(false);
+      await openFlowDetail(fid, false, code);
+    } catch (e) { $("#flow-set-msg").textContent = e.message; }
+  });
+}
+
+export function paramsDialog(fid) {
+  const card = (((Flow.list || {})["流"] || []).find(c => c["流编号"] === fid)) || {};
+  openModal("改流参数（" + fid + "）", paramsFormHtml(card["参数"] || {}));
+  $("#btn-flow-p-save").addEventListener("click", async () => {
+    $("#flow-p-msg").textContent = "";
+    try {
+      const res = await api("/api/flow/params", {
+        method: "POST",
+        body: JSON.stringify({"流编号": fid, "流资金": $("#flow-p-capital").value,
+                              "目标收益率_pct": $("#flow-p-target").value,
+                              "最大亏损_pct": $("#flow-p-loss").value,
+                              "备注": $("#flow-p-note").value}),
+      });
+      if (!res.ok) { $("#flow-p-msg").textContent = res.error; return; }
+      closeModal();
+      toast("流参数已保存", "ok");
+      await loadFlows(false);
+      await openFlowDetail(fid, false);
+    } catch (e) { $("#flow-p-msg").textContent = e.message; }
+  });
+}
+
+export function removeTarget(fid, code) {
+  confirmModal("把这只标的移出这条流？",
+    "它的成交明细、体检记录与计划引用会一起删除（计划产物文件仍在 data/ai/track 里可单独打开）；" +
+    "分配资金会退回这条流。", async () => {
+      try {
+        const res = await api("/api/flow/target/remove", {
+          method: "POST", body: JSON.stringify({"流编号": fid, "代码": code}),
+        });
+        if (!res.ok) { toast(res.error, "bad"); return; }
+        toast("已移除 " + code, "ok");
+        await loadFlows(false);
+        await openFlowDetail(fid, false);
+      } catch (e) { toast(e.message, "bad"); }
+    }, "确认移除");
+}
+
+export async function closeFlow(fid, code) {
+  const what = code ? (code + " 这只标的") : "这条流（流内所有标的）";
+  confirmModal("结束" + what + "？", "结束后不再盯盘、也不能再补录成交；已经记录的成交与盈亏都会保留。",
     async () => {
       try {
         const res = await api("/api/flow/close", {
-          method: "POST", body: JSON.stringify({"流编号": fid, "原因": "人工结束"}),
+          method: "POST",
+          body: JSON.stringify({"流编号": fid, "代码": code || "", "原因": "人工结束"}),
         });
         if (!res.ok) { toast(res.error, "bad"); return; }
-        toast("已结束 " + fid, "ok");
+        toast("已结束 " + (code || fid), "ok");
         await loadFlows(false);
-        await openFlowDetail(fid, false);
+        await openFlowDetail(fid, false, code || undefined);
       } catch (e) { toast(e.message, "bad"); }
     }, "确认结束");
 }
@@ -538,6 +658,39 @@ export async function deleteTrackPlan(path) {
 
 /* ---------------- 交互绑定 ---------------- */
 
+/* 卡片与详情里的按钮统一走这里：动作名在 data-act，标的小按钮带 data-code。 */
+function onCardAction(e, root) {
+  const t = e.target;
+  if (!t || !t.closest) return;
+  const planLink = t.closest("[data-plan]");
+  if (planLink) { e.preventDefault(); openReport(planLink.dataset.plan); return; }
+  const delLink = t.closest("[data-delfill]");
+  if (delLink) { deleteFill(delLink.dataset.delfill, delLink.dataset.code); return; }
+  const act = t.dataset ? t.dataset.act : "";
+  if (!act) return;
+  const cardEl = t.closest(".flow-card") || root.closest(".flow-card");
+  const fid = (cardEl && cardEl.dataset.fid) || Flow.fid;
+  const code = t.dataset.code || Flow.code;
+  if (act === "detail") openFlowDetail(fid, true, code);
+  else if (act === "plan") startFlowJob("flow_plan", {流编号: fid, 代码: code ? [code] : []});
+  else if (act === "check") openCheckDialog(fid, code);
+  else if (act === "add") { if (cardEl) addTarget(cardEl); }
+  else if (act === "params") paramsDialog(fid);
+  else if (act === "setstyle") setTargetDialog(fid, code);
+  else if (act === "remove") removeTarget(fid, code);
+  else if (act === "closetarget") closeFlow(fid, code);
+  else if (act === "close") closeFlow(fid);
+  else if (act === "delete") deleteFlow(fid);
+  else if (act === "sync") syncLedger(code);
+  else if (act === "fill") {
+    openFlowDetail(fid, false, code).then(() => {
+      const body = targetBodyEl(code);
+      const box = body && body.querySelector('[data-fill="price"]');
+      if (box) { box.focus(); box.scrollIntoView({block: "center"}); }
+    });
+  }
+}
+
 export function initFlowView() {
   initPoller();
   renderForm();                               // 开流表单是静态的：进页面就渲染，绑定在 renderForm 里
@@ -575,26 +728,16 @@ export function initFlowView() {
   });
   const nudge = $("#btn-flow-nudge");
   if (nudge) nudge.addEventListener("click", () => {
-    const pending = (Flow.list && Flow.list["待重算"]) || [];
-    pending.forEach(fid => startFlowJob("flow_plan", {流编号: fid}));
+    ((Flow.list && Flow.list["待重算"]) || []).forEach(x =>
+      startFlowJob("flow_plan", {流编号: x["流编号"], 代码: x["代码"]}));
   });
   const list = $("#flow-list");
-  if (list) list.addEventListener("click", e => {
-    const card = e.target.closest(".flow-card");
-    if (!card) return;
-    const fid = card.dataset.fid;
-    const act = e.target.dataset ? e.target.dataset.act : "";
-    if (act === "detail") openFlowDetail(fid, true);
-    else if (act === "plan") startFlowJob("flow_plan", {流编号: fid});
-    else if (act === "close") closeFlow(fid);
-    else if (act === "delete") deleteFlow(fid);
-    else if (act === "sync") syncLedger();
-    else if (act === "fill") {
-      openFlowDetail(fid, false).then(() => {
-        const box = $("#flow-fill-price");
-        if (box) { box.focus(); box.scrollIntoView({block: "center"}); }
-      });
-    } else if (act === "check") openCheckDialog(fid);
+  if (list) list.addEventListener("click", e => onCardAction(e, list));
+  const detailBox = $("#flow-detail");
+  if (detailBox) detailBox.addEventListener("click", e => {
+    const tab = e.target.closest("[data-tab]");
+    if (tab) { switchTab(tab.dataset.tab); return; }
+    onCardAction(e, detailBox);
   });
   const closedBox = $("#flow-closed");
   if (closedBox) closedBox.addEventListener("click", e => {
@@ -605,12 +748,12 @@ export function initFlowView() {
   if (stop) stop.addEventListener("click", stopFlowJob);
   const plan = $("#btn-flow-plan");
   if (plan) plan.addEventListener("click", () => {
-    if (Flow.fid) startFlowJob("flow_plan", {流编号: Flow.fid});
+    if (Flow.fid) startFlowJob("flow_plan", {流编号: Flow.fid, 代码: Flow.code ? [Flow.code] : []});
     else toast("先选一条流", "bad");
   });
   const check = $("#btn-flow-check");
   if (check) check.addEventListener("click", () => {
-    if (Flow.fid) openCheckDialog(Flow.fid);
+    if (Flow.fid) openCheckDialog(Flow.fid, Flow.code);
     else toast("先选一条流", "bad");
   });
   const addT = $("#btn-track-add");
@@ -647,8 +790,10 @@ export function initFlowView() {
 }
 
 
-export function openCheckDialog(fid) {
+export function openCheckDialog(fid, code) {
   openModal("体检：排查意外情况",
+    '<div class="muted">标的：<b>' + esc(code || "—") + "</b>" +
+    ' <span class="muted">（体检只针对这一只标的，逐只排查）</span></div>' +
     '<div class="field"><label>你看到的异常 <span class="muted">可选，例如「公告被立案」「董事长变更」</span></label>' +
     '<textarea class="editor" id="flow-check-note" style="min-height:70px"></textarea></div>' +
     '<div class="muted">体检会看：消息面（公告 / 风险公告 / 快讯 / 调研 / 榜单）+ 个股量价 + 板块与大盘 + 你的流内成交与盈亏。' +
@@ -659,7 +804,7 @@ export function openCheckDialog(fid) {
     '<button class="btn ghost" id="flow-check-news">只抓消息面再体检（较快）</button></div>');
   const go = pre => {
     const note = ($("#flow-check-note") || {}).value || "";
-    runCheck(fid, note, pre);
+    runCheck(fid, code, note, pre);
   };
   $("#flow-check-run").addEventListener("click", () => go(""));
   $("#flow-check-pull").addEventListener("click", () => go("pull"));

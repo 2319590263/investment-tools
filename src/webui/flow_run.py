@@ -22,15 +22,24 @@ from .sources import newest_file, stock3d_snapshot
 from .store import load_account_bundle, load_holdings_bundle
 
 FLOW_SYSTEM = (track.TRACK_SYSTEM + "这是「交易流」里的一只标的：从建仓到清仓全程跟踪，"
-               "成交明细与盈亏由用户当场记录，是唯一权威的执行口径。")
+               "成交明细与盈亏由用户当场记录，是唯一权威的执行口径。同一条流里可能有多只标的，"
+               "每只标的各选一种打法，计划只针对当前这一只。")
 
-FLOW_PROMPT = (track.TRACK_PROMPT + "\n\n【交易流补充要求】\n"
-               "1. 本次没有单独的「执行情况」录入表：成交明细就是执行情况，写在【交易流状态】里，"
-               "一律以它为准，禁止自行推断是否成交。\n"
-               "2. 计划要服务于这条流的目标收益率与最大亏损（参数在【交易流状态】）："
-               "合计盈亏已经达到目标盈利时，明确建议减仓/清仓落袋；触及最大亏损时明确建议止损离场。\n"
-               "3. 已经成交过的价位不要再重复建议建仓；未成交的条目可以继续沿用，或按新数据微调。\n"
-               "4. 没有新数据支持时不要为了改动而改动——计划要尽量稳定。")
+
+def plan_prompt(style):
+    """按打法拼提示词：打法决定计划的时间尺度、止损宽窄与加减仓节奏。"""
+    style = style or flow_store.DEFAULT_STYLE
+    hint = flow_store.STYLE_HINT.get(style, "")
+    return (track.TRACK_PROMPT + "\n\n【交易流补充要求】\n"
+            "1. 本次没有单独的「执行情况」录入表：成交明细就是执行情况，写在【交易流状态】里，"
+            "一律以它为准，禁止自行推断是否成交。\n"
+            "2. 这只标的的打法是「%s」：%s 计划的持有周期、买卖点间距、止损宽窄、加减仓节奏"
+            "都要匹配这个打法，不要给跨打法的建议。\n"
+            "3. 计划要服务于这条流的目标收益率与最大亏损（流级参数与这只标的的分配资金都在"
+            "【交易流状态】里）：合计盈亏已经达到目标盈利时，明确建议减仓/清仓落袋；"
+            "触及最大亏损时明确建议止损离场。\n"
+            "4. 已经成交过的价位不要再重复建议建仓；未成交的条目可以继续沿用，或按新数据微调。\n"
+            "5. 没有新数据支持时不要为了改动而改动——计划要尽量稳定。" % (style, hint))
 
 CHECK_SYSTEM = ("你是 A 股持仓的「意外排查」助手。用户已经有一条交易计划和一条持仓流，"
                 "你要只依据给定数据判断：有没有出现会让计划失效的意外情况"
@@ -64,24 +73,31 @@ def _num(v, nd=2):
     return "—" if v is None else (("%." + str(int(nd)) + "f") % v)
 
 
-def flow_state_lines(doc, price=None, source=None, when=None):
-    """给模型的「交易流状态」章节：参数 / 持仓 / 盈亏 / 成交明细 / 事件 / 最近体检。"""
-    sym = doc.get("标的") or {}
+def flow_state_lines(doc, node, price=None, source=None, when=None):
+    """给模型的「交易流状态」章节：流的资金口径 + 这只标的的持仓 / 盈亏 / 成交 / 事件 / 最近体检。"""
     params = doc.get("参数") or {}
-    pos = doc.get("持仓") or {}
-    pnl = doc.get("盈亏") or {}
-    out = ["- 流编号：%s ｜ 状态：%s ｜ 创建：%s（起始日 %s）"
-           % (doc.get("流编号"), doc.get("状态"), doc.get("创建时间"), doc.get("起始日")),
-           "- 标的：%s %s" % (sym.get("名称") or "—", sym.get("代码") or "—"),
-           "- 参数：本流资金 %s 元 ｜ 目标收益率 %s%%（目标盈利 %s 元）｜ 最大亏损 %s%%（%s 元）"
-           " ｜ 最大加仓次数 %s"
-           % (_num(params.get("本流资金")), _num(params.get("目标收益率_pct")),
-              _num(params.get("目标盈利_元")), _num(params.get("最大亏损_pct")),
-              _num(params.get("最大亏损_元")), params.get("最大加仓次数")),
+    summary = doc.get("汇总") or {}
+    pos = node.get("持仓") or {}
+    pnl = node.get("盈亏") or {}
+    style = node.get("打法") or flow_store.DEFAULT_STYLE
+    others = [n for n in flow_store.targets(doc) if n is not node]
+    out = ["- 流编号：%s ｜ 流状态：%s ｜ 创建：%s（起始日 %s）｜ 流内标的 %d 只"
+           % (doc.get("流编号"), doc.get("状态"), doc.get("创建时间"), doc.get("起始日"),
+              len(flow_store.targets(doc))),
+           "- 流级参数（资金是流的属性）：流资金 %s 元 ｜ 目标收益率 %s%%（整条流目标盈利 %s 元）"
+           "｜ 最大亏损 %s%%（整条流最大亏损 %s 元）｜ 流内分配资金合计 %s 元"
+           % (_num(params.get("流资金")), _num(params.get("目标收益率_pct")),
+              _num(summary.get("目标盈利_元")), _num(params.get("最大亏损_pct")),
+              _num(summary.get("最大亏损_元")), _num(summary.get("分配合计"))),
+           "- 本标的：%s %s ｜ 打法：%s（%s）｜ 分配资金 %s 元（这只标的的收益率与最大亏损按它算）"
+           "｜ 加入日 %s"
+           % (node.get("名称") or "—", node.get("代码") or "—", style,
+              flow_store.STYLE_HINT.get(style, ""), _num(node.get("分配资金")),
+              node.get("加入日") or "—"),
            "- 持仓：%s 股（可用 %s）｜ 平均成本 %s ｜ 期初：%s"
            % (_num(pos.get("股数"), 0), _num(pos.get("可用"), 0),
-              _num(pos.get("平均成本"), 4), (doc.get("期初") or {}).get("说明") or "—"),
-           "- 盈亏：已实现 %s ｜ 浮动 %s ｜ 合计 %s 元 ｜ 收益率 %s%%（按投入成本 %s%%）"
+              _num(pos.get("平均成本"), 4), (node.get("期初") or {}).get("说明") or "—"),
+           "- 本标的盈亏：已实现 %s ｜ 浮动 %s ｜ 合计 %s 元 ｜ 收益率 %s%%（按投入成本 %s%%）"
            " ｜ 目标进度 %s%%"
            % (_num(pnl.get("已实现_元")), _num(pnl.get("浮动_元")), _num(pnl.get("合计_元")),
               _num(pnl.get("收益率_pct")), _num(pnl.get("按成本收益率_pct")),
@@ -90,7 +106,7 @@ def flow_state_lines(doc, price=None, source=None, when=None):
            % (_num(price if price is not None else pnl.get("现价"), 3),
               source or pnl.get("价格来源") or "—", when or pnl.get("价格时间") or "—"),
            "- 成交明细（权威口径，按时间升序）："]
-    fills = doc.get("成交") or []
+    fills = node.get("成交") or []
     if not fills:
         out.append("  （还没有成交：这是空仓开流，先出建仓计划）")
     for f in fills:
@@ -99,12 +115,20 @@ def flow_state_lines(doc, price=None, source=None, when=None):
                       _num(f.get("价格"), 4), _num(f.get("金额")), _num(f.get("手续费")),
                       f.get("来源"),
                       (" ｜ 备注：%s" % f.get("备注")) if f.get("备注") else ""))
-    events = list(doc.get("事件") or [])[-5:]
+    if others:
+        out.append("- 同一条流里的其他标的（只看不改，各自独立判定）：")
+        for o in others:
+            o_pnl = o.get("盈亏") or {}
+            out.append("  · %s %s ｜ 打法 %s ｜ 分配资金 %s 元 ｜ 持仓 %s 股 ｜ 合计盈亏 %s 元"
+                       % (o.get("名称") or "—", o.get("代码") or "—",
+                          o.get("打法") or flow_store.DEFAULT_STYLE, _num(o.get("分配资金")),
+                          _num((o.get("持仓") or {}).get("股数"), 0), _num(o_pnl.get("合计_元"))))
+    events = list(node.get("事件") or [])[-5:]
     if events:
         out.append("- 最近事件：")
         for e in events:
             out.append("  · %s %s：%s" % (e.get("时间"), e.get("类型"), e.get("文案")))
-    checks = doc.get("体检") or []
+    checks = node.get("体检") or []
     if checks:
         last = checks[-1]
         out.append("- 最近一次体检：%s —— %s（%s）"
@@ -112,9 +136,9 @@ def flow_state_lines(doc, price=None, source=None, when=None):
     return "\n".join(out)
 
 
-def _holding_from_flow(doc, c6, name, price, account):
-    """把流内持仓折成 aiplan 的持仓口径（机械校验要用）。"""
-    pos = doc.get("持仓") or {}
+def _holding_from_flow(node, c6, name, price, account):
+    """把这只标的的持仓折成 aiplan 的持仓口径（机械校验要用）。"""
+    pos = node.get("持仓") or {}
     qty = num(pos.get("股数")) or 0.0
     if qty <= 0:
         return aiplan.holdings_metrics(None, c6, name, price, account)
@@ -124,9 +148,9 @@ def _holding_from_flow(doc, c6, name, price, account):
     return aiplan.holdings_metrics(row, c6, name, price, account)
 
 
-def _prev_payload(doc):
-    """流上挂着的上一份计划产物（读回 json），没有就返回 (None, None)。"""
-    path = (doc.get("计划") or {}).get("产物路径")
+def _prev_payload(node):
+    """这只标的上挂着的上一份计划产物（读回 json），没有就返回 (None, None)。"""
+    path = (node.get("计划") or {}).get("产物路径")
     if not path:
         return None, None
     full = path if os.path.isabs(path) else os.path.join(ROOT, path)
@@ -135,19 +159,49 @@ def _prev_payload(doc):
 
 
 def run_plan(log, ctl, opts):
-    """生成 / 重算这条流的下一步计划（1 次研判档调用，可选复核档）。"""
+    """生成 / 重算这条流里标的的计划（每只标的 1 次研判档调用，可选复核档）。"""
     fid = str((opts or {}).get("流编号") or "").strip()
     doc, err = flow_store.load_flow(fid)
     if err:
         raise RuntimeError(err)
     if doc.get("状态") != flow_store.ACTIVE_STATE:
         raise RuntimeError("这条流已经结束（%s），不再重算计划" % doc.get("状态"))
-    sym = doc.get("标的") or {}
-    c6 = aiplan.code6(sym.get("代码") or "")
-    name = sym.get("名称") or c6
-    kind = "重算计划" if doc.get("计划") else "首份计划"
+    codes = [aiplan.code6(c) for c in ((opts or {}).get("代码") or []) if aiplan.code6(c)]
+    nodes = []
+    for c6 in codes:
+        node, err = flow_store.find_target(doc, c6)
+        if err:
+            raise RuntimeError(err)
+        nodes.append(node)
+    if not codes:
+        nodes = flow_store.active_targets(doc)
+    if not nodes:
+        raise RuntimeError("这条流里还没有标的：先在「交易流」页加一只标的")
+    log("[..] 交易流 %s ｜ 本次 %d 只标的：%s"
+        % (fid, len(nodes), "、".join("%s %s" % (n.get("代码"), n.get("名称")) for n in nodes)))
+    out = []
+    for node in nodes:
+        if ctl.get("cancel"):
+            raise RuntimeError("已取消")
+        out.append(_plan_one(log, ctl, doc, node, opts))
+    bad = [r for r in out if r.get("error")]
+    return {"流编号": fid, "计划": out, "计划数": len(out), "成功": len(out) - len(bad),
+            "方向": out[0].get("方向") if len(out) == 1 else None,
+            "置信度": out[0].get("置信度") if len(out) == 1 else None,
+            "error": ("%d 只标的的计划没出来：%s"
+                      % (len(bad), "；".join("%s %s" % (r.get("代码"), str(r.get("error"))[:80])
+                                            for r in bad))) if bad else None}
+
+
+def _plan_one(log, ctl, doc, node, opts):
+    """给一只标的生成 / 重算计划：事实包最前面是「交易流状态」（成交与盈亏是权威口径）。"""
+    fid = doc.get("流编号")
+    c6 = aiplan.code6(node.get("代码") or "")
+    name = node.get("名称") or c6
+    style = node.get("打法") or flow_store.DEFAULT_STYLE
+    kind = "重算计划" if node.get("计划") else "首份计划"
     apply = track.apply_trade_date()
-    log("[..] 交易流 %s ｜ %s %s ｜ %s" % (fid, c6, name, kind))
+    log("[..] %s %s ｜ 打法 %s ｜ %s" % (c6, name, style, kind))
     log("[..] 适用交易日 %s（%s）" % (apply["适用交易日"], apply["口径"]))
     s = track_run._settings(opts or {})
     log("[OK] profile %s（%s）｜ 研判 %s / %s ｜ key %s"
@@ -162,17 +216,17 @@ def run_plan(log, ctl, opts):
     quote = quote_map.get(c6)
     for h in qhints:
         log("[WARN] %s" % h)
-    added = flow_store.sync_ledger(doc, account=account, log=log)
+    added = flow_store.sync_ledger(node, account=account, log=log)
     if added:
         log("[OK] 交易台账并入 %d 笔成交" % added)
     brief = track.quote_brief(None, quote, None)
     price = num(brief.get("价格"))
-    flow_store.recompute(doc, account=account)
-    flow_store.apply_price(doc, price, brief.get("来源"), brief.get("时间"))
-    log("[OK] 流内持仓 %s 股 ｜ 合计盈亏 %s 元 ｜ 目标进度 %s%%"
-        % (_num((doc.get("持仓") or {}).get("股数"), 0), _num((doc.get("盈亏") or {}).get("合计_元")),
-           _num((doc.get("盈亏") or {}).get("进度_pct"))))
-    prev_doc, prev_path = _prev_payload(doc)
+    flow_store.recompute(node, account=account)
+    flow_store.apply_price(node, price, brief.get("来源"), brief.get("时间"))
+    log("[OK] 持仓 %s 股 ｜ 合计盈亏 %s 元 ｜ 目标进度 %s%%"
+        % (_num((node.get("持仓") or {}).get("股数"), 0), _num((node.get("盈亏") or {}).get("合计_元")),
+           _num((node.get("盈亏") or {}).get("进度_pct"))))
+    prev_doc, prev_path = _prev_payload(node)
     mech = track.mech_reference(prev_doc, quote)
     tech, s3_path = background.stock3d_tech(c6)
     bg = background.market_context(tech, pan_doc, name=name,
@@ -187,18 +241,19 @@ def run_plan(log, ctl, opts):
         hints.append("没有 pan 快照：大盘与板块背景缺失")
     data = {"标的": {"代码": quotes_mod.thscode_of(c6) or c6, "名称": name},
             "适用交易日": apply["适用交易日"], "交易日口径": apply["口径"],
+            "打法": style, "打法规格": flow_store.STYLE_HINT.get(style),
             "账户": account,
-            "持仓": _holding_from_flow(doc, c6, name, price, account),
+            "持仓": _holding_from_flow(node, c6, name, price, account),
             "实盘": brief,
             "上一份计划": {"来源": "跟踪产物" if prev_doc else None, "路径": rel(prev_path) if prev_path else None,
                        "适用交易日": ((prev_doc or {}).get("适用交易日")),
-                       "文档": prev_doc, "执行记录": flow_store.exec_record(doc),
-                       "执行摘要": track.exec_summary(flow_store.exec_record(doc)),
+                       "文档": prev_doc, "执行记录": flow_store.exec_record(node),
+                       "执行摘要": track.exec_summary(flow_store.exec_record(node)),
                        "需要执行记录": False, "说明": None},
             "机械参考": mech, "背景": bg}
     fact = track.factpack_sections(data, track_run.clamp_chars((opts or {}).get("max_chars")),
                                    front=[("交易流状态（成交与盈亏，权威口径）",
-                                           flow_state_lines(doc, price, brief.get("来源"),
+                                           flow_state_lines(doc, node, price, brief.get("来源"),
                                                             brief.get("时间")))])
     log("    事实包 %s 字符（%d 章节%s）"
         % (fact["字符数"], len(fact["章节"]),
@@ -206,10 +261,10 @@ def run_plan(log, ctl, opts):
     if ctl.get("cancel"):
         raise RuntimeError("已取消")
     plan_obj, research = track_run.call_plan(log, s, fact["文本"], ctl,
-                                             system=FLOW_SYSTEM, prompt=FLOW_PROMPT)
+                                             system=FLOW_SYSTEM, prompt=plan_prompt(style))
     if ctl.get("cancel"):
         raise RuntimeError("已取消")
-    is_etf = bool(sym.get("是否ETF"))
+    is_etf = bool(node.get("是否ETF"))
     checks = aiplan.mechanical_checks(account, data["持仓"], price, plan_obj or {}, is_etf,
                                       track_run._other_mv(holdings, c6))
     review = {"called": False, "role": "复核", "model": None, "ok": False, "usage": {},
@@ -222,6 +277,7 @@ def run_plan(log, ctl, opts):
         "generated_at": now_str(),
         "trade_date": ((pan_doc or {}).get("trade_date") or apply["现在"][:10]),
         "适用交易日": apply["适用交易日"], "交易日口径": apply["口径"],
+        "打法": style, "打法规格": flow_store.STYLE_HINT.get(style),
         "标的": {"代码": quotes_mod.thscode_of(c6) or c6, "名称": name,
                  "类型": "etf" if is_etf else "stock"},
         "profile": {"名称": s["名称"], "来源": s["来源"], "研判": s["研判"],
@@ -233,17 +289,22 @@ def run_plan(log, ctl, opts):
                  "裁剪记录": fact["裁剪"], "降级明细": hints},
         "事实包": {"字符数": fact["字符数"], "sha1": aiplan.sha1_text(fact["文本"]),
                    "章节": fact["章节"], "上限": fact["上限"], "说明": fact["说明"]},
-        "交易流": {"流编号": fid, "本流资金": (doc.get("参数") or {}).get("本流资金"),
+        "交易流": {"流编号": fid, "流资金": (doc.get("参数") or {}).get("流资金"),
                    "目标收益率_pct": (doc.get("参数") or {}).get("目标收益率_pct"),
                    "最大亏损_pct": (doc.get("参数") or {}).get("最大亏损_pct"),
-                   "持仓": doc.get("持仓"), "盈亏": doc.get("盈亏"),
-                   "成交笔数": len(doc.get("成交") or [])},
+                   "流内标的数": len(flow_store.targets(doc)),
+                   "本标的": {"代码": c6, "名称": name, "打法": style,
+                            "分配资金": node.get("分配资金")},
+                   "流内其他标的": [s for s in flow_store.symbols(doc)
+                                if aiplan.code6(s.get("代码") or "") != c6],
+                   "持仓": node.get("持仓"), "盈亏": node.get("盈亏"),
+                   "成交笔数": len(node.get("成交") or [])},
         "上次计划": {"来源": "跟踪产物" if prev_doc else None,
                      "路径": rel(prev_path) if prev_path else None,
                      "适用交易日": (prev_doc or {}).get("适用交易日"),
                      "方向": ((prev_doc or {}).get("研判") or {}).get("json", {}).get("方向"),
                      "计划": track.plan_items(prev_doc),
-                     "执行摘要": track.exec_summary(flow_store.exec_record(doc))},
+                     "执行摘要": track.exec_summary(flow_store.exec_record(node))},
         "上次计划复盘": {"是否有上次计划": bool(prev_doc),
                          "说明": "执行情况以流内成交明细为准（见【交易流状态】）",
                          "计划": [{"动作": r.get("动作"), "价格区间": r.get("区间"),
@@ -255,12 +316,13 @@ def run_plan(log, ctl, opts):
         "note": "本计划由本地程序采集的数据 + 大模型生成，不构成投资建议。",
     }
     path = track.save_plan(payload, track.render_md(payload))
-    flow_store.set_plan(doc, payload, path, kind=kind)
+    flow_store.set_plan(node, payload, path, kind=kind)
     flow_store.save_flow(doc)
     log("[OK] %s 已落盘 %s" % (kind, rel(path)))
     if research.get("error"):
         log("[WARN] 本次没有模型计划：%s" % str(research["error"])[:160])
-    return {"流编号": fid, "计划": rel(path), "方向": (plan_obj or {}).get("方向"),
+    return {"流编号": fid, "代码": c6, "名称": name, "打法": style,
+            "计划": rel(path), "方向": (plan_obj or {}).get("方向"),
             "置信度": (plan_obj or {}).get("置信度"),
             "一句话结论": (plan_obj or {}).get("一句话结论"),
             "error": research.get("error"), "usage": research.get("usage") or {},
@@ -308,11 +370,11 @@ def _json_dump(node):
     return json.dumps(node, ensure_ascii=False)
 
 
-def check_factpack(doc, news, bg, brief, note, s3_path, s3_date, price, cap=30000):
-    """体检事实包：流状态 + 计划 + 消息面 + 量价 + 板块大盘 + 用户补充。"""
-    plan = doc.get("计划") or {}
+def check_factpack(doc, node, news, bg, brief, note, s3_path, s3_date, price, cap=30000):
+    """体检事实包：流与标的的状态 + 计划 + 消息面 + 量价 + 板块大盘 + 用户补充。"""
+    plan = node.get("计划") or {}
     sections = [("体检对象与交易流状态", flow_state_lines(
-        doc, (brief or {}).get("价格") if brief else price,
+        doc, node, (brief or {}).get("价格") if brief else price,
         (brief or {}).get("来源"), (brief or {}).get("时间")))]
     rows = plan.get("条目") or []
     plan_lines = ["- 计划产物：%s（生成于 %s ｜ 适用交易日 %s）"
@@ -456,7 +518,7 @@ def _call_check(log, s, fact, ctl):
         return None, block
     usage = res.get("usage") or {}
     block["usage"] = usage
-    block["cost"] = aiplan.compute_cost(provider, s["model"], usage, s["cfg"].get("汇率") or {})
+    block["cost"] = track_run.cost_of(provider, s["model"], usage, s["cfg"])
     block["latency_ms"] = res.get("latency_ms")
     block["ok"] = bool(res.get("ok"))
     obj, perr = aiplan.extract_json(res.get("text") or "") if block["ok"] else (None, None)
@@ -480,17 +542,28 @@ def _call_check(log, s, fact, ctl):
 
 
 def run_check(log, ctl, opts):
-    """体检：先（可选）抓数，再把「流状态 + 计划 + 消息面 + 量价 + 板块大盘」交给模型判定。"""
+    """体检：先（可选）抓数，再把「标的与流状态 + 计划 + 消息面 + 量价 + 板块大盘」交给模型判定。"""
     fid = str((opts or {}).get("流编号") or "").strip()
     doc, err = flow_store.load_flow(fid)
     if err:
         raise RuntimeError(err)
-    sym = doc.get("标的") or {}
-    c6 = aiplan.code6(sym.get("代码") or "")
-    name = sym.get("名称") or c6
+    codes = [aiplan.code6(c) for c in ((opts or {}).get("代码") or []) if aiplan.code6(c)]
+    node = None
+    if codes:
+        node, err = flow_store.find_target(doc, codes[0])
+        if err:
+            raise RuntimeError(err)
+    else:
+        pool = flow_store.active_targets(doc) or flow_store.targets(doc)
+        if len(pool) != 1:
+            raise RuntimeError("这条流里有 %d 只标的，体检要指明「代码」" % len(pool))
+        node = pool[0]
+    c6 = aiplan.code6(node.get("代码") or "")
+    name = node.get("名称") or c6
     note = str((opts or {}).get("补充说明") or "").strip()
     pre = str((opts or {}).get("先抓") or "").strip()
-    log("[..] 体检：%s %s（流 %s）" % (c6, name, fid))
+    log("[..] 体检：%s %s（流 %s ｜ 打法 %s）"
+        % (c6, name, fid, node.get("打法") or flow_store.DEFAULT_STYLE))
     if pre in ("pull", "news"):
         _pull(log, ctl, c6, pre)
         if ctl.get("cancel"):
@@ -499,9 +572,9 @@ def run_check(log, ctl, opts):
     log("[OK] profile %s（%s）｜ 研判 %s / %s ｜ key %s"
         % (s["名称"], s["来源"], s["provider"].get("名称"), s["model"],
            aiplan.mask_key(s["key"])))
-    node, s3_path, s3_date = _stock3d_symbol(c6)
-    news = (node or {}).get("news") or {}
-    tech = (node or {}).get("tech") or {}
+    s3_node, s3_path, s3_date = _stock3d_symbol(c6)
+    news = (s3_node or {}).get("news") or {}
+    tech = (s3_node or {}).get("tech") or {}
     if not news:
         log("[WARN] 本地快照里没有该标的的消息面：按「消息面缺失」处理（可先抓一次数据）")
     pan_doc, pan_path = background.latest_pan()
@@ -510,21 +583,21 @@ def run_check(log, ctl, opts):
     for h in qhints:
         log("[WARN] %s" % h)
     account = load_account_bundle().get("配置") or {}
-    flow_store.sync_ledger(doc, account=account, log=log)
+    flow_store.sync_ledger(node, account=account, log=log)
     brief = track.quote_brief(None, quote, None)
     price = num(brief.get("价格"))
-    flow_store.recompute(doc, account=account)
-    flow_store.apply_price(doc, price, brief.get("来源"), brief.get("时间"))
+    flow_store.recompute(node, account=account)
+    flow_store.apply_price(node, price, brief.get("来源"), brief.get("时间"))
     bg = background.market_context(tech, pan_doc, name=name,
                                    pan_rel=rel(pan_path) if pan_path else None)
-    fact = check_factpack(doc, news, bg, brief, note, s3_path, s3_date, price)
+    fact = check_factpack(doc, node, news, bg, brief, note, s3_path, s3_date, price)
     log("    事实包 %s 字符（消息面 %s 条公告 / %s 条快讯）"
         % (len(fact), len(((news.get("notices") or {}).get("items") or [])),
            len(news.get("flash") or [])))
     if ctl.get("cancel"):
         raise RuntimeError("已取消")
     result, block = _call_check(log, s, fact, ctl)
-    rec = flow_store.add_check(doc, result or {}, note=note, model=s["model"],
+    rec = flow_store.add_check(node, result or {}, note=note, model=s["model"],
                                usage=block.get("usage"),
                                cost=(block.get("cost") or {}).get("人民币_估算"),
                                error=block.get("error"), fact_chars=len(fact))
@@ -534,10 +607,11 @@ def run_check(log, ctl, opts):
             "价位": price, "手数文本": "",
             "文案": "体检：%s —— %s" % (rec["结论"],
                                     rec.get("一句话") or block.get("error") or "（无结论）"),
-            "报告路径": (doc.get("计划") or {}).get("产物路径"),
+            "报告路径": (node.get("计划") or {}).get("产物路径"),
             "级别": flow_store.CHECK_LEVELS.get(rec["结论"], "warn"), "流编号": fid}])
     flow_store.save_flow(doc)
-    return {"流编号": fid, "结论": rec["结论"], "是否失效": rec["是否失效"],
+    return {"流编号": fid, "代码": c6, "名称": name, "结论": rec["结论"],
+            "是否失效": rec["是否失效"],
             "一句话结论": rec.get("一句话"), "依据": rec.get("依据") or [],
             "处理建议": rec.get("处理建议"), "风险": rec.get("风险") or [],
             "数据依赖": rec.get("数据依赖") or {}, "时间": rec.get("时间"),
