@@ -2,7 +2,7 @@
 import { api } from "../core/api.js";
 import { State, refreshState, registerView } from "../core/app.js";
 import { confirmMobileWrite, isMobileShell } from "../core/mobile.js";
-import { $, chip, esc, toast } from "../core/util.js";
+import { $, chip, esc, freshNote, toast } from "../core/util.js";
 import { closeModal, confirmModal, openModal } from "../ui/modal.js";
 
 function optionsHtml(profiles, current, followLabel) {
@@ -368,6 +368,8 @@ export async function checkModel() {
   el.innerHTML = '<span class="l-dim">正在自检 …</span>';
   const body = { kind: "check", phase: "post", profile: $("#check-profile").value || (State.models || {})["默认_profile"] };
   const res = await api("/api/jobs", { method: "POST", body: JSON.stringify(body) });
+    const _fresh = freshNote(res);
+    if (_fresh) toast(_fresh, "warn");
   if (!res.ok) { toast(res.error, "bad"); return; }
   let from = 0;
   const tick = async () => {

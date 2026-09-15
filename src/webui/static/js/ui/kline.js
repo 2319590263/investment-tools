@@ -192,7 +192,7 @@ export async function loadStructKline(b) {
   try {
     data = await api("/api/kline?code=" + encodeURIComponent(code) + "&limit=400");
   } catch (e) {
-    if (loading) loading.textContent = "没有日K缓存（data/history/），先跑一次 stock3d.py pull " + code;
+    if (loading) loading.textContent = "日K 取不到（东财与腾讯都失败）：检查网络，或先用 python main.py stock3d pull " + code + " 落一份本地缓存";
     return;
   }
   const levels = [];
@@ -249,12 +249,12 @@ export async function showKlineModal(code, name) {
   try {
     data = await api("/api/kline?code=" + encodeURIComponent(code) + "&limit=120");
   } catch (e) {
-    toast("没有 " + code + " 的日K缓存：先跑 python main.py stock3d pull " + code, "warn");
+    toast("日K 取不到（东财与腾讯都失败）：检查网络，或先跑 python main.py stock3d pull " + code, "warn");
     return;
   }
   const bars = (data || {}).bars || [];
   if (!bars.length) {
-    toast("日K缓存为空：先跑 python main.py stock3d pull " + code, "warn");
+    toast("日K 返回为空：先跑 python main.py stock3d pull " + code + " 落一份本地缓存", "warn");
     return;
   }
   openModal((name ? name + " " : "") + code + " · 日K（前复权）",

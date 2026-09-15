@@ -134,7 +134,7 @@
           <div class="card-b row">
             <span id="flow-nudge-text"></span>
             <div class="spacer"></div>
-            <button class="btn primary" id="btn-flow-nudge">一键重算</button>
+            <button class="btn primary" id="btn-flow-nudge">一键计算</button>
           </div>
         </div>
 
@@ -172,40 +172,15 @@
           <div class="card">
             <div class="card-h"><span>计划与体检</span><span class="muted" id="flow-detail-head"></span>
               <div class="spacer"></div>
-              <button class="btn ghost" id="btn-flow-plan">重算计划</button>
+              <button class="btn ghost" id="btn-flow-plan">计算计划</button>
               <button class="btn ghost" id="btn-flow-check">体检</button>
               <button class="btn danger ghost" id="btn-flow-stop" hidden>中断</button></div>
             <div class="card-b">
               <div class="run-line">
                 <span class="chip" id="flow-status">待运行</span>
                 <code class="cmd" id="flow-cmd">POST /api/jobs {kind:"flow_plan"}</code></div>
-              <pre class="console" id="flow-console"><span class="muted">模型只在你点「重算计划 / 体检」时调用（每次 1 次）…</span></pre>
+              <pre class="console" id="flow-console"><span class="muted">模型只在你点「计算计划 / 体检」时调用（每次 1 次）…</span></pre>
               <div id="flow-detail"><div class="muted">在流卡片上点「详情」看成交、体检与计划；点「体检」排查意外情况。</div></div>
-            </div>
-          </div>
-          <div class="card">
-            <div class="card-h"><span>跟踪清单（计划来源）</span><span class="muted" id="track-path"></span>
-              <span class="muted" id="track-day"></span>
-              <span class="muted" id="track-detail-head"></span>
-              <div class="spacer"></div>
-              <button class="btn ghost" id="btn-track-import">从自选股导入</button>
-              <button class="btn ghost" id="btn-track-quotes">刷新实盘价</button></div>
-            <div class="card-b">
-              <div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end">
-                <div class="field" style="margin:0;flex:0 0 130px">
-                  <label>证券代码</label><input id="track-code" placeholder="如 600967" /></div>
-                <div class="field" style="margin:0;flex:1 1 130px">
-                  <label>名称 <span class="muted">可选</span></label><input id="track-name" /></div>
-                <div class="field" style="margin:0;flex:1 1 130px">
-                  <label>备注 <span class="muted">可选</span></label><input id="track-note" /></div>
-                <button class="btn primary" id="btn-track-add">加入跟踪</button>
-                <button class="btn" id="btn-track-generate">生成选中标的的计划</button>
-              </div>
-              <div class="err" id="track-msg"></div>
-            </div>
-            <div class="card-b table-wrap"><table class="tbl" id="track-table"></table></div>
-            <div class="card-b" id="track-detail">
-              <div class="muted">在清单里点「详情」看这只标的的计划与执行记录。</div>
             </div>
           </div>
         </div>

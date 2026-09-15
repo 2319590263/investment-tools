@@ -63,6 +63,9 @@ for (const viewport of VIEWPORTS) {
   const problems = [];
   page.on("console", m => { if (m.type() === "error") problems.push("console: " + m.text()); });
   page.on("pageerror", e => problems.push("pageerror: " + e.message));
+  page.on("response", r => {
+    if (r.status() >= 500) problems.push("HTTP " + r.status() + " " + r.url());
+  });
 
   await page.goto(BASE + "/m", { waitUntil: "domcontentloaded" });
   await page.waitForSelector('body[data-shell="mobile"]', { timeout: 20000 });
@@ -111,9 +114,15 @@ for (const viewport of VIEWPORTS) {
 
   try {
     await gotoView("holdings");
-    const inputSize = await page.locator("#account-form input").first().evaluate(el => getComputedStyle(el).fontSize);
-    console.log(`${parseFloat(inputSize) >= 16 ? "PASS" : "FAIL"}  ${viewport.width}px 表单字号 ${inputSize}`);
-    if (parseFloat(inputSize) < 16) failed++;
+    // 账户表单是接口回来后异步渲染的：先等它出现再量字号，否则会量到空
+    await page.waitForSelector("#account-form input", { timeout: 15000 }).catch(() => {});
+    const inputCount = await page.locator("#account-form input").count();
+    const inputSize = inputCount
+      ? await page.locator("#account-form input").first().evaluate(el => getComputedStyle(el).fontSize)
+      : "0px";
+    console.log(`${inputCount && parseFloat(inputSize) >= 16 ? "PASS" : "FAIL"}  ` +
+      `${viewport.width}px 表单字号 ${inputSize}`);
+    if (!inputCount || parseFloat(inputSize) < 16) failed++;
     await page.click("#btn-account-save");
     await page.waitForSelector("#overlay:not([hidden])", { timeout: 10000 });
     const accountConfirm = await page.locator("#modal-title").textContent();

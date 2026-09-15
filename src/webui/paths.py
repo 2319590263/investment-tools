@@ -8,6 +8,8 @@
 import importlib.util
 import os
 import sys
+import time
+import uuid
 from datetime import datetime
 
 
@@ -164,14 +166,28 @@ def save_like(path, text):
 
 def atomic_write(path, data, encoding="utf-8", newline=None):
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
-    tmp = path + ".tmp"
+    # 临时文件名带随机后缀：总控台轮询 + 页面并行请求可能同时写同一个 JSON，
+    # 固定用 <path>.tmp 会互相踩（Windows 上表现为偶发 FileNotFoundError/PermissionError）。
+    tmp = "%s.%s.tmp" % (path, uuid.uuid4().hex[:8])
     if isinstance(data, str):
         with open(tmp, "w", encoding=encoding, newline=newline) as f:
             f.write(data)
     else:
         with open(tmp, "wb") as f:
             f.write(data)
-    os.replace(tmp, path)
+    last = None
+    for attempt in range(5):
+        try:
+            os.replace(tmp, path)
+            return
+        except OSError as exc:                 # 别的线程正好在读这个文件时会短暂占用
+            last = exc
+            time.sleep(0.05 * (attempt + 1))
+    try:
+        os.remove(tmp)
+    except OSError:
+        pass
+    raise last
 
 
 def backup(path):

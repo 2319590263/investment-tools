@@ -392,6 +392,38 @@ def _symbol_name(c6):
 
 def load_kline(code, limit=180):
     """读 data/history/<thscode>.json 的日K缓存（pan.py / stock3d.py 抓数时落盘）。"""
+    return _kline_from_history(code, limit)
+
+
+def auto_kline(code, limit=180):
+    """本地没有日K缓存时**按需拉取**（批注 3）：东财 push2his 优先，失败回退腾讯前复权。
+
+    返回结构与 load_kline 一致，所以报告页 / 卡片 / 荐股的 K 线图都不用改；
+    拉到的日K 落在 data/cache/mech/kline_<日期>/，当天再点就是零请求。
+    """
+    from .mechdata import kline as fetch_daily
+    c6 = aiplan.code6(code or "")
+    if not c6:
+        return None
+    bars = fetch_daily(c6)
+    if not bars:
+        return None
+    try:
+        n = max(20, min(int(limit or 180), 800))
+    except (TypeError, ValueError):
+        n = 180
+    return {"代码": c6, "名称": _symbol_name(c6), "文件": None,
+            "来源": "日K 自动拉取（东财 push2his，失败回退腾讯前复权）", "复权": "前复权",
+            "总根数": len(bars), "抓取时间": now_str(), "bars": bars[-n:]}
+
+
+def kline_bundle(code, limit=180):
+    """K 线接口的唯一入口：先读本地缓存，没有就自动拉取（批注 3）。取不到返回 None。"""
+    return load_kline(code, limit) or auto_kline(code, limit)
+
+
+def _kline_from_history(code, limit=180):
+    """老实现：只读 data/history/ 缓存（保留，供排障与离线查看）。"""
     c6 = aiplan.code6(code or "")
     if not c6 or not os.path.isdir(HISTORY_DIR):
         return None

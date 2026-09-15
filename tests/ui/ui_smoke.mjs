@@ -341,14 +341,17 @@ await gotoView("flow");
 await page.waitForSelector("#btn-flow-create", { timeout: 20000 }).catch(() => {});
 for (const sel of ["#flow-list", "#btn-flow-create", "#btn-flow-poll", "#flow-interval",
                    "#flow-band", "#flow-console", "#flow-detail", "#btn-flow-plan",
-                   "#btn-flow-check", "#nav-flow-badge", "#track-table", "#btn-track-generate",
-                   "#btn-track-add", "#btn-track-import", "#btn-track-quotes",
+                   "#btn-flow-check", "#nav-flow-badge",
                    "#flow-new-capital", "#flow-new-target", "#flow-new-loss", "#flow-new-style",
                    "#flow-new-code", "#flow-new-alloc"]) {
   const found = await page.locator(sel).count();
   console.log(`${found > 0 ? "PASS" : "FAIL"}  交易流页控件 ${sel}`);
   if (!found) failed++;
 }
+/* 批注 5：跟踪清单卡整块删除（接口仍在服务端） */
+const trackGone = await page.locator("#track-table, #btn-track-add, #btn-track-generate, #track-detail").count();
+console.log(`${trackGone === 0 ? "PASS" : "FAIL"}  跟踪清单卡已删除（残留 ${trackGone}）`);
+if (trackGone !== 0) failed++;
 /* 开流表单：打法三选一、没有「最多加仓」栏（它已按需求删掉） */
 const styleOpts = await page.locator("#flow-new-style option").allInnerTexts().catch(() => []);
 const styleOk = ["超短线", "短线", "波段"].every(s => styleOpts.includes(s));
@@ -379,6 +382,23 @@ if (flowCards > 0) {
   console.log(`${targetTables >= 1 ? "PASS" : "FAIL"}  流卡片里有标的表`);
   if (targetTables < 1) failed++;
 }
+/* 批注 1/2/4：行内分时图（买卖线 + 计划线）与「计算」按钮 */
+const calcBtns = await page.locator("#flow-list [data-act='plan']").allInnerTexts().catch(() => []);
+const calcOk = calcBtns.some(x => x.trim() === "计算");
+console.log(`${calcOk ? "PASS" : "FAIL"}  行内按钮已改名「计算」（${calcBtns.join("/")}）`);
+if (!calcOk) failed++;
+await page.waitForSelector("#flow-list canvas.fl-chart", { timeout: 25000 }).catch(() => {});
+const rowCharts = await page.locator("#flow-list canvas.fl-chart").count();
+console.log(`${rowCharts > 0 ? "PASS" : "FAIL"}  标的行内分时图已渲染（${rowCharts} 张）`);
+if (!(rowCharts > 0)) failed++;
+const chartPixels = await page.evaluate(() => {
+  const c = document.querySelector("#flow-list canvas.fl-chart");
+  if (!c) return 0;
+  try { return c.getContext("2d").getImageData(0, 0, c.width, c.height).data.filter(v => v > 0).length; }
+  catch (e) { return -1; }
+});
+console.log(`${chartPixels !== 0 ? "PASS" : "FAIL"}  行内分时图确实画了东西（非空像素 ${chartPixels}）`);
+if (chartPixels === 0) failed++;
 const bandOptions = await page.locator("#flow-band option").count();
 console.log(`${bandOptions >= 3 ? "PASS" : "FAIL"}  接近带档位（${bandOptions} 档）`);
 if (bandOptions < 3) failed++;

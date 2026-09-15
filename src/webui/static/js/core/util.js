@@ -69,4 +69,13 @@ export const EMPTY = '<div class="empty">暂无数据</div>';
 
 export function chip(text, cls) { return '<span class="chip ' + (cls || "") + '">' + esc(text) + "</span>"; }
 
+/* 任务启动时服务端会把「过期快照清理」结果一起返回（批注：事实包不许用过期数据）。 */
+export function freshNote(res) {
+  const clear = (res || {})["清理"] || {};
+  const gone = (clear["删除"] || []).length;
+  if (!gone) return "";
+  return "已删除 " + gone + " 份过期行情快照（早于最近交易日 " + clear["最近交易日"] +
+    "）；想看最新背景先跑一次大盘 / 个股抓数（pan post / stock3d pull）。";
+}
+
 export function badge(text, cls) { return '<span class="badge ' + (cls || "flat") + '">' + esc(text) + "</span>"; }

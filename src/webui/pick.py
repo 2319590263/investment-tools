@@ -44,6 +44,14 @@ PICK_BOARD_FIELDS = ("f2,f3,f5,f6,f7,f8,f12,f14,f20,f21,f24,f25,f62,f104,f105,"
 PICK_SYSTEM = ("你是 A 股选股助手，只依据给定的事实数据做评估与筛选，不编造数值，"
                "不给出具体买卖价位，结论不构成投资建议。")
 
+
+def pick_list_meta():
+    """荐股接口的元信息（页面「历史结果」与参数默认值用）。"""
+    return {"打法": [{"值": name, "周期": cycle} for name, cycle in PICK_STYLES],
+            "候选池上限默认": PICK_POOL_SIZE, "送模型数量默认": PICK_MODEL_TOP,
+            "推荐榜长度": PICK_PAGE_TOP,
+            "扫描口径": "东财全 A 按成交额降序 → 排除规则 → 候选池 → 机械打分 → 前 N 只送模型"}
+
 PICK_PROMPT = """下面是本地程序采集的全市场中性行情与财务数据（只有数值与口径，没有买卖建议）。
 请只输出一个合法 JSON 对象：不要解释文字、不要 markdown 代码围栏、不要注释、不要尾随逗号。
 

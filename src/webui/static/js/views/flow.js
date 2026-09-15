@@ -1,26 +1,24 @@
-/* 交易流页：一条流从建仓盯到清仓（人工体检 + 盘后重算），下方保留「跟踪清单 + 计划生成」。
+/* 交易流页：一条流从建仓盯到清仓（人工体检 + 盘后计算），下方保留「跟踪清单 + 计划生成」。
  *
  * 设计要点：
  *   · 盯盘只是「按档位重新取值」：一次批量报价覆盖所有在跑的流，机械判定盈亏 / 接近带 /
- *     达标止损，写消息队列；**不调模型**（模型只在你点「重算计划 / 体检」时跑）。
+ *     达标止损，写消息队列；**不调模型**（模型只在你点「计算计划 / 体检」时跑）。
  *   · 盘中不改计划：成交只重算持仓与盈亏，计划要重算得你点。
  *   · 页面切后台自动暂停，非交易时段不发请求（与总控台同一套 poller 口径与档位记忆）。
  */
 import { api } from "../core/api.js";
 import { createPoller, INTERVALS, loadPref, savePref } from "../core/poller.js";
 import { openReport, registerView } from "../core/app.js";
-import { $, $$, esc, toast } from "../core/util.js";
+import { $, $$, esc, freshNote, toast } from "../core/util.js";
 import { closeModal, confirmModal, openModal } from "../ui/modal.js";
 import { closedLine, flowCardsHtml, flowDetailHtml, flowFormHtml, paramsFormHtml,
          targetFormHtml } from "../ui/flowcards.js";
 import { bindFlowChart, drawFlowMinutes } from "../ui/flowchart.js";
-import { trackDetailHtml, trackListHtml } from "../ui/trackcards.js";
 
 export const Flow = {list: null, detail: null, fid: null, settings: null, day: "",
                     jobId: null, timer: null, from: 0, running: false, runningKind: "",
-                    poller: null, checked: null, lastJobResult: null};
+                    poller: null, lastJobResult: null};
 
-export const Track = {data: null, detail: null, code: null};
 
 
 /* ---------------- 日志与状态 ---------------- */
@@ -53,7 +51,7 @@ function logClear(msg) {
 function setRunning(on, kind) {
   Flow.running = on;
   Flow.runningKind = on ? kind : "";
-  ["#btn-flow-create", "#btn-track-generate", "#btn-flow-plan", "#btn-flow-check",
+  ["#btn-flow-create", "#btn-flow-plan", "#btn-flow-check",
    "#btn-flow-nudge"].forEach(sel => {
     const el = $(sel);
     if (el) el.disabled = on;
@@ -145,10 +143,27 @@ export function renderFlows() {
     nudge.hidden = true;
   }
   setBadge(cards, pending);
+  drawRowCharts(cards);
   if (Flow.settings && Flow.settings["打开页面自动补跑"]) {
     pending.forEach(x => startFlowJob("flow_plan", {流编号: x["流编号"], 代码: x["代码"]}));
   }
   renderForm();
+}
+
+/* 每只标的行下面那张分时图：进入/刷新页面时按顺序补画（服务端有 60 秒缓存 + 限速）。 */
+export function drawRowCharts(cards) {
+  const list = $("#flow-list");
+  if (!list) return;
+  const jobs = [];
+  (cards || []).forEach(card => (card["标的"] || []).forEach(t => {
+    if (t["代码"]) jobs.push({fid: card["流编号"], code: t["代码"]});
+  }));
+  (async () => {
+    for (const job of jobs) {
+      if (!document.querySelector('[data-chart-code="' + job.code + '"]')) continue;
+      await renderFlowChart(job.fid, job.code, false, list);
+    }
+  })();
 }
 
 function setBadge(cards, pending) {
@@ -232,7 +247,7 @@ export async function createFlow() {
 }
 
 
-/* ---------------- 任务（重算计划 / 体检） ---------------- */
+/* ---------------- 任务（计算计划 / 体检） ---------------- */
 
 export async function startFlowJob(kind, extra) {
   if (Flow.running) { toast("已有任务在跑，等它结束", "warn"); return; }
@@ -241,6 +256,8 @@ export async function startFlowJob(kind, extra) {
   setRunning(true, kind);
   try {
     const res = await api("/api/jobs", {method: "POST", body: JSON.stringify(body)});
+    const _fresh = freshNote(res);
+    if (_fresh) toast(_fresh, "warn");
     if (!res.ok) throw new Error(res.error || "启动失败");
     Flow.jobId = res.id;
     Flow.from = 0;
@@ -332,9 +349,9 @@ export async function openFlowDetail(fid, refresh, code) {
   }
 }
 
-/* 分时图：详情卡与行内「分时」按钮共用这一条渲染路径（一个标的一次请求）。 */
-export async function renderFlowChart(fid, code, refresh) {
-  const box = $("#flow-detail");
+/* 分时图：流卡片的标的行内 + 详情卡共用这一条渲染路径（一个标的一次请求，60 秒缓存）。 */
+export async function renderFlowChart(fid, code, refresh, root) {
+  const box = root || $("#flow-detail") || document;
   if (!box || !code) return;
   const canvas = box.querySelector('[data-chart-code="' + code + '"]');
   const note = box.querySelector('[data-chart-note="' + code + '"]');
@@ -566,127 +583,6 @@ export async function deleteFlow(fid) {
 }
 
 
-/* ---------------- 跟踪清单（计划来源） ---------------- */
-
-export function trackRender() {
-  const d = Track.data || {};
-  const table = $("#track-table");
-  if (!table) return;
-  if (Flow.checked === null) Flow.checked = new Set((d["清单"] || []).map(c => c["代码"]));
-  table.innerHTML = trackListHtml(d["清单"] || [], Flow.checked);
-  $("#track-path").textContent = d["路径"] || "";
-  $("#track-day").textContent = "适用交易日 " + (d["适用交易日"] || "—");
-}
-
-export async function loadTrack(refresh) {
-  try {
-    Track.data = await api("/api/track/all" + (refresh ? "?refresh=1" : ""));
-    trackRender();
-  } catch (e) {
-    toast("读取跟踪清单失败：" + e.message, "bad");
-  }
-}
-
-export async function openTrackDetail(code, refresh) {
-  Track.code = code;
-  try {
-    Track.detail = await api("/api/track?code=" + encodeURIComponent(code) + (refresh ? "&refresh=1" : ""));
-    $("#track-detail").innerHTML = trackDetailHtml(Track.detail);
-    $("#track-detail-head").textContent = (Track.detail["名称"] || code) + " · " +
-      (Track.detail["适用交易日"] || "");
-    const none = $("#btn-track-exec-none");
-    if (none) none.addEventListener("click", () => {
-      $$("#track-exec tbody tr[data-no] select[data-state]").forEach(s => { s.value = "未执行"; });
-    });
-    const save = $("#btn-track-exec-save");
-    if (save) save.addEventListener("click", saveTrackExec);
-    $$("#track-detail [data-plan]").forEach(a => a.addEventListener("click", e => {
-      e.preventDefault(); openReport(a.dataset.plan);
-    }));
-    $$("#track-detail [data-del]").forEach(b => b.addEventListener("click", () => deleteTrackPlan(b.dataset.del)));
-  } catch (e) {
-    $("#track-detail").innerHTML = '<div class="fail">读取失败：' + esc(e.message) + "</div>";
-  }
-}
-
-function collectExec() {
-  return $$("#track-exec tbody tr[data-no]").map(tr => ({
-    "编号": Number(tr.dataset.no),
-    "执行状态": (tr.querySelector("select[data-state]") || {}).value || "",
-    "成交价": (tr.querySelector("input[data-price]") || {}).value || null,
-    "成交股数": (tr.querySelector("input[data-shares]") || {}).value || null,
-    "备注": (tr.querySelector("input[data-note]") || {}).value || "",
-  }));
-}
-
-export async function saveTrackExec() {
-  if (!Track.detail || !Track.detail["最新"]) return;
-  const note = $("#track-exec-note");
-  try {
-    const res = await api("/api/track/exec", {
-      method: "POST",
-      body: JSON.stringify({"计划路径": Track.detail["最新"]["json路径"],
-                            "条目": collectExec(),
-                            "总体备注": note ? note.value : ""}),
-    });
-    if (!res.ok) { toast(res.error, "bad"); return; }
-    toast("执行记录已保存", "ok");
-    await openTrackDetail(Track.code, false);
-    await loadTrack(false);
-  } catch (e) { toast("保存失败：" + e.message, "bad"); }
-}
-
-export async function addTrack() {
-  const code = ($("#track-code").value || "").trim();
-  if (!code) { $("#track-code").focus(); return; }
-  $("#track-msg").textContent = "";
-  try {
-    const res = await api("/api/tracklist/add", {
-      method: "POST",
-      body: JSON.stringify({code: code, name: ($("#track-name").value || "").trim(),
-                            note: ($("#track-note").value || "").trim()}),
-    });
-    if (!res.ok) { $("#track-msg").textContent = res.error; return; }
-    toast("已加入跟踪：" + code, "ok");
-    $("#track-code").value = ""; $("#track-name").value = ""; $("#track-note").value = "";
-    await loadTrack(false);
-  } catch (e) { $("#track-msg").textContent = e.message; }
-}
-
-export async function importWatchlist() {
-  try {
-    const res = await api("/api/tracklist/import-watchlist", {method: "POST", body: "{}"});
-    if (!res.ok) { toast(res.error, "bad"); return; }
-    toast(res["新增"] ? "已从自选股导入 " + res["新增"] + " 只" : "自选股里的标的都已在清单里",
-          res["新增"] ? "ok" : "warn");
-    await loadTrack(false);
-  } catch (e) { toast(e.message, "bad"); }
-}
-
-export async function removeTrack(code) {
-  confirmModal("从跟踪清单移除？", "只从清单里删掉，已生成的计划产物与交易流都会保留。", async () => {
-    try {
-      const res = await api("/api/tracklist/remove", {method: "POST", body: JSON.stringify({code: code})});
-      if (!res.ok) { toast(res.error, "bad"); return; }
-      toast("已移除 " + code, "ok");
-      await loadTrack(false);
-    } catch (e) { toast(e.message, "bad"); }
-  }, "确认移除");
-}
-
-export async function deleteTrackPlan(path) {
-  confirmModal("删除这份计划产物？", "会移入回收站，超过 7 天才真正删除。", async () => {
-    try {
-      const res = await api("/api/track/delete", {method: "POST", body: JSON.stringify({path: path})});
-      if (!res.ok) { toast(res.error, "bad"); return; }
-      toast("已移入回收站", "ok");
-      if (Track.code) await openTrackDetail(Track.code, false);
-      await loadTrack(false);
-    } catch (e) { toast(e.message, "bad"); }
-  }, "确认删除");
-}
-
-
 /* ---------------- 交互绑定 ---------------- */
 
 /* 卡片与详情里的按钮统一走这里：动作名在 data-act，标的小按钮带 data-code。 */
@@ -704,11 +600,11 @@ function onCardAction(e, root) {
   const code = t.dataset.code || Flow.code;
   if (act === "detail") openFlowDetail(fid, true, code);
   else if (act === "minutes") {
-    /* 卡片行点「分时」：先切到这只标的的详情，再取一次最新分时并滚过去 */
-    openFlowDetail(fid, false, code).then(() => {
-      const body = targetBodyEl(code);
-      renderFlowChart(fid, code, true);
-      const canvas = body && body.querySelector('[data-chart-code="' + code + '"]');
+    /* 「分时」= 强制刷新这只标的那张行内分时图（跳过 60 秒缓存）并滚到它 */
+    const root = cardEl || $("#flow-list") || document;
+    renderFlowChart(fid, code, true, root).then(() => {
+      const canvas = root.querySelector('[data-chart-code="' + code + '"]') ||
+        document.querySelector('[data-chart-code="' + code + '"]');
       if (canvas) canvas.scrollIntoView({block: "center"});
     });
   }
@@ -796,37 +692,6 @@ export function initFlowView() {
     if (Flow.fid) openCheckDialog(Flow.fid, Flow.code);
     else toast("先选一条流", "bad");
   });
-  const addT = $("#btn-track-add");
-  if (addT) addT.addEventListener("click", addTrack);
-  ["#track-code", "#track-name", "#track-note"].forEach(sel => {
-    const el = $(sel);
-    if (el) el.addEventListener("keydown", e => { if (e.key === "Enter") addTrack(); });
-  });
-  const imp = $("#btn-track-import");
-  if (imp) imp.addEventListener("click", importWatchlist);
-  const quotes = $("#btn-track-quotes");
-  if (quotes) quotes.addEventListener("click", () => loadTrack(true));
-  const gen = $("#btn-track-generate");
-  if (gen) gen.addEventListener("click", () => {
-    const codes = ((Track.data && Track.data["清单"]) || []).map(c => c["代码"])
-      .filter(c => Flow.checked.has(c));
-    if (!codes.length) { toast("先勾选要生成计划的标的", "bad"); return; }
-    startFlowJob("track", {codes: codes});
-  });
-  const table = $("#track-table");
-  if (table) table.addEventListener("change", e => {
-    const code = e.target && e.target.dataset ? e.target.dataset.check : null;
-    if (!code) return;
-    if (e.target.checked) Flow.checked.add(code); else Flow.checked.delete(code);
-  });
-  if (table) table.addEventListener("click", e => {
-    const t = e.target;
-    if (!t || !t.dataset) return;
-    if (t.dataset.detail) { e.preventDefault(); openTrackDetail(t.dataset.detail, true); }
-    else if (t.dataset.open) { e.preventDefault(); openTrackDetail(t.dataset.open, false); }
-    else if (t.dataset.gen) { e.preventDefault(); startFlowJob("track", {codes: [t.dataset.gen]}); }
-    else if (t.dataset.untrack) removeTrack(t.dataset.untrack);
-  });
 }
 
 
@@ -854,7 +719,7 @@ export function openCheckDialog(fid, code) {
 
 /* 注册给 core/app.js：切到本页自动刷一次（拉一次批量报价 + 机械判定）。 */
 registerView("flow", {
-  onShow: async () => { await loadFlows(true); await loadTrack(false); },
+  onShow: async () => { await loadFlows(true); },
   openDetail: openFlowDetail,
   refresh: loadFlows,
 });

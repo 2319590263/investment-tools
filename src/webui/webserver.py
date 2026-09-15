@@ -24,12 +24,13 @@ from . import alerts as alerts_store
 from . import flowapi
 from .holdings_sync import CAPTCHA_ROOT, captcha_image, holdings_python, install_hint, submit_captcha_answer
 from .jobs import JOBS, build_check_argv, build_run_argv, run_batch
-from .market import (build_market, build_state, build_symbols, latest_market_forecast,
-                     load_kline, run_market_forecast)
+from .market import (build_market, build_state, build_symbols, kline_bundle,
+                     latest_market_forecast, run_market_forecast)
 from .overview import build_overview
 from .flowbook import ledger_view
+from .freshness import purge_stale
 from .paths import ACCOUNT_PATH, AIPLAN, DATA_DIR, MODELS_PATH, PICK_DIR, POOL_PATH, PYTHON, ROOT, STATIC_DIR, TRACKLIST_PATH, TRASH_DIR, TRASH_TTL_DAYS, WATCHLIST_PATH, aiplan, inside, num, read_text, rel, save_like
-from .pick import (PICK_MODEL_TOP, PICK_PAGE_TOP, PICK_POOL_SIZE, PICK_STYLES, pick_param)
+from .pick import pick_list_meta, pick_param
 from .pick_run import pick_boards_bundle, pick_l1_subs, run_pick
 from .plancheck import plancheck_bundle, run_plan_check
 from .store import (load_account_bundle, load_holdings_bundle, load_models_bundle,
@@ -273,9 +274,10 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/symbols":
             return self._json({"items": build_symbols()})
         if path == "/api/kline":
-            data = load_kline(q.get("code", [""])[0], q.get("limit", ["180"])[0])
+            # 本地没日K缓存就自动拉取（批注 3），取数口径见 market.kline_bundle
+            data = kline_bundle(q.get("code", [""])[0], q.get("limit", ["180"])[0])
             if not data:
-                return self._err("没有该标的的日K缓存（data/history/）", 404)
+                return self._err("日K 取不到（东财与腾讯都失败，或该代码不在两市）", 404)
             return self._json(data)
         if path == "/api/watchlist":
             return self._json({"路径": rel(WATCHLIST_PATH), "存在": os.path.exists(WATCHLIST_PATH),
@@ -293,13 +295,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(bundle)
             return self._json(latest_pick_bundle())
         if path == "/api/pick/list":
-            return self._json({"items": list_picks(),
-                               "目录": rel(PICK_DIR),
-                               "打法": [{"值": name, "周期": cycle} for name, cycle in PICK_STYLES],
-                               "候选池上限默认": PICK_POOL_SIZE,
-                               "送模型数量默认": PICK_MODEL_TOP,
-                               "推荐榜长度": PICK_PAGE_TOP,
-                               "扫描口径": "东财全 A 按成交额降序 → 排除规则 → 候选池"})
+            return self._json(dict({"items": list_picks(), "目录": rel(PICK_DIR)},
+                                   **pick_list_meta()))
         if path == "/api/pick/boards":
             refresh = (q.get("refresh", ["0"])[0] or "0") in ("1", "true", "yes")
             return self._json(pick_boards_bundle(refresh))
@@ -552,6 +549,7 @@ class Handler(BaseHTTPRequestHandler):
                                "reports": list_reports()})
         if path == "/api/jobs":
             kind = body.get("kind") or "run"
+            fresh = {} if kind == "holdings_sync" else purge_stale()   # 事实包不许用过期数据
             if kind == "run":
                 try:
                     argv = build_run_argv(body)
@@ -578,7 +576,7 @@ class Handler(BaseHTTPRequestHandler):
                 meta = {"phase": phase, "codes": codes, "label": "批量研判"}
                 job = JOBS.start(kind, [], meta, label="批量研判持仓（%d 只）" % len(codes),
                                  func=lambda log, ctl: run_batch(log, ctl, codes, phase, opts))
-                return self._json({"ok": True, "id": job["id"], "命令": job["命令"], "标的": codes})
+                return self._json({"ok": True, "id": job["id"], "命令": job["命令"], "清理": fresh, "标的": codes})
             elif kind == "market":
                 prof = body.get("profile")
                 argv = []
@@ -587,7 +585,7 @@ class Handler(BaseHTTPRequestHandler):
                                  func=lambda log, ctl: run_market_forecast(
                                      log, profile=prof, model_pro=body.get("model_pro"),
                                      api_base=body.get("api_base"), api_key=body.get("api_key")))
-                return self._json({"ok": True, "id": job["id"], "命令": job["命令"]})
+                return self._json({"ok": True, "id": job["id"], "命令": job["命令"], "清理": fresh})
             elif kind == "pick":
                 opts = pick_param(body)
                 if opts["model_top"] > opts["pool_size"]:
@@ -600,7 +598,7 @@ class Handler(BaseHTTPRequestHandler):
                     opts["pool_size"], opts["model_top"])
                 job = JOBS.start(kind, [], meta, label=label,
                                  func=lambda log, ctl: run_pick(log, ctl, opts))
-                return self._json({"ok": True, "id": job["id"], "命令": job["命令"],
+                return self._json({"ok": True, "id": job["id"], "命令": job["命令"], "清理": fresh,
                                    "参数": meta})
             elif kind == "plancheck":
                 report_rel = (body.get("report") or "").strip()
@@ -614,7 +612,7 @@ class Handler(BaseHTTPRequestHandler):
                 meta = {"label": "实盘复核点评", "报告": report_rel, "profile": opts["profile"]}
                 job = JOBS.start(kind, [], meta, label="实盘复核点评（1 次模型调用）",
                                  func=lambda log, ctl: run_plan_check(log, ctl, opts))
-                return self._json({"ok": True, "id": job["id"], "命令": job["命令"],
+                return self._json({"ok": True, "id": job["id"], "命令": job["命令"], "清理": fresh,
                                    "参数": meta})
             elif kind == "holdings_sync":
                 py = holdings_python()
@@ -623,7 +621,7 @@ class Handler(BaseHTTPRequestHandler):
                 argv = [py, "-X", "utf8", "-m", "webui.holdings_sync", "sync", "--no-captcha-prompt"]
                 meta = {"label": "同步同花顺持仓", "只读": True}
                 job = JOBS.start(kind, argv, meta, label="同步同花顺持仓（只读）")
-                return self._json({"ok": True, "id": job["id"], "命令": job["命令"]})
+                return self._json({"ok": True, "id": job["id"], "命令": job["命令"], "清理": fresh})
             elif kind == "track":
                 codes = [str(c).strip() for c in (body.get("codes") or []) if str(c).strip()]
                 if not codes:
@@ -641,17 +639,17 @@ class Handler(BaseHTTPRequestHandler):
                          % (len(codes), "，含复核档" if opts["review"] else "，1 次模型调用/只"))
                 job = JOBS.start(kind, [], meta, label=label,
                                  func=lambda log, ctl: run_track(log, ctl, opts))
-                return self._json({"ok": True, "id": job["id"], "命令": job["命令"],
+                return self._json({"ok": True, "id": job["id"], "命令": job["命令"], "清理": fresh,
                                    "参数": meta})
             elif kind in ("flow_plan", "flow_check"):
                 job, err = self._flow_job(kind, body)
                 if err:
                     return self._err(err)
-                return self._json({"ok": True, "id": job["id"], "命令": job["命令"]})
+                return self._json({"ok": True, "id": job["id"], "命令": job["命令"], "清理": fresh})
             else:
                 return self._err("未知任务类型：%s" % kind)
             job = JOBS.start(kind, argv, meta)
-            return self._json({"ok": True, "id": job["id"], "命令": job["命令"]})
+            return self._json({"ok": True, "id": job["id"], "命令": job["命令"], "清理": fresh})
         m = re.match(r"^/api/jobs/([^/]+)/cancel$", path)
         if m:
             ok = JOBS.cancel(m.group(1))

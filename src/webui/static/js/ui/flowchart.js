@@ -97,18 +97,27 @@ export function drawFlowMinutes(canvas, data) {
   });
   seg(avgs, C.avg, 1.2);
   seg(prices, C.price, 1.6);
+  /* 买卖线（批注 4）：成交不再画点，而是按成交价画一条贯穿到该时刻的水平线，
+     买=红虚线、卖=绿虚线；左侧标「买 8.14 / 卖 8.20」。 */
   const today = data["分时日期"];
   (data["成交"] || []).forEach(f => {
     const i = fillIndex(times, f["日期"], today, f["时间"]);
     const price = num(f["价格"]);
     if (i === null || price === null) return;
     const buy = String(f["方向"] || "") === "买入";
-    const cx = x(Math.min(i, prices.length - 1)), cy = y(price);
+    const cx = x(Math.min(i, Math.max(prices.length - 1, 1)));
+    const cy = y(price);
+    ctx.save();
+    ctx.setLineDash([3, 3]);
+    ctx.strokeStyle = buy ? C.buy : C.sell;
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.moveTo(padL, cy); ctx.lineTo(cx, cy); ctx.stroke();
+    ctx.setLineDash([]);
     ctx.fillStyle = buy ? C.buy : C.sell;
-    ctx.beginPath();
-    if (buy) { ctx.moveTo(cx, cy - 5); ctx.lineTo(cx - 4, cy + 3); ctx.lineTo(cx + 4, cy + 3); }
-    else { ctx.moveTo(cx, cy + 5); ctx.lineTo(cx - 4, cy - 3); ctx.lineTo(cx + 4, cy - 3); }
-    ctx.closePath(); ctx.fill();
+    ctx.beginPath(); ctx.arc(cx, cy, 2.2, 0, Math.PI * 2); ctx.fill();
+    ctx.font = "11px system-ui, sans-serif";
+    ctx.fillText((buy ? "买 " : "卖 ") + fmt(price, 3), 6, cy - 3);
+    ctx.restore();
   });
   ctx.fillStyle = C.text; ctx.font = "11px system-ui, sans-serif";
   ctx.fillText(fmt(hi, 3), 6, padT + 8);

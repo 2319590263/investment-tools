@@ -1,7 +1,7 @@
 /* 运行研判页：参数收集、任务轮询、日志、批量与预检。 */
 import { api } from "../core/api.js";
 import { State, openReport, registerView, viewApi } from "../core/app.js";
-import { $, $$, esc, toast } from "../core/util.js";
+import { $, $$, esc, freshNote, toast } from "../core/util.js";
 import { closeModal, openModal } from "../ui/modal.js";
 
 export const Run = { phase: "post", jobId: null, timer: null, from: 0, codes: [] };
@@ -146,6 +146,8 @@ export async function startJob(kind) {
   setRunning(true);
   try {
     const res = await api("/api/jobs", { method: "POST", body: JSON.stringify(body) });
+    const _fresh = freshNote(res);
+    if (_fresh) toast(_fresh, "warn");
     if (!res.ok) throw new Error(res.error || "启动失败");
     Run.jobId = res.id;
     $("#run-cmd").textContent = res["命令"] || "";

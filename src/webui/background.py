@@ -118,4 +118,6 @@ def stock3d_tech(code):
 
 def latest_pan():
     path = newest_file(pan_files())
-    return (aiplan.read_json(path) or {}), path
+    # 过期快照被清掉之后这里可能没有任何 pan 文件：返回空文档 + None，
+    # 让事实包如实写「没有 pan 快照」，而不是抛异常或拿旧数据冒充。
+    return ((aiplan.read_json(path) or {}) if path else {}), path

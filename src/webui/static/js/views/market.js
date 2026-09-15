@@ -1,7 +1,7 @@
 /* 大盘快照页与走势预测。 */
 import { api } from "../core/api.js";
 import { State, registerView } from "../core/app.js";
-import { $, EMPTY, chip, dirColor, esc, fmt, fmtPct, has, kindClass, num, sleep, toast } from "../core/util.js";
+import { $, EMPTY, chip, dirColor, esc, fmt, fmtPct, freshNote, has, kindClass, num, sleep, toast } from "../core/util.js";
 import { card, kv, listOrEmpty, pill, renderScenarioSummary } from "../ui/cards.js";
 import { sceneCards } from "../ui/kline.js";
 
@@ -144,7 +144,18 @@ export async function loadMarket() {
       " · 生成 " + (doc.generated_at || "—")
     : "没有找到 pan 快照（先跑一次 pan.py）";
   const body = $("#market-body");
-  if (!doc) { body.innerHTML = EMPTY; return; }
+  if (!doc) {
+    /* 过期快照会被自动清理（事实包不许用过期数据），所以「没有快照」是正常状态：
+       这里给一张带操作指引的卡，而不是一片空白。 */
+    body.innerHTML = '<div class="card"><div class="card-h"><span>没有行情快照</span>' +
+      '<span class="muted">data/pan/ 下没有可用的最新快照</span></div>' +
+      '<div class="card-b"><div class="hint">过期的快照已按「事实包不许用过期数据」自动清理' +
+      '（移入 data/ai/.trash/stale/，7 天后真删）。想恢复大盘背景与事实包里的量能数据，' +
+      '先跑一次：<code>python main.py pan post</code>；个股消息面用 ' +
+      '<code>python main.py stock3d pull &lt;代码&gt;</code>（或直接在「运行研判」里跑）。' +
+      '</div></div></div>';
+    return;
+  }
   const dd = doc.data || {};
   const parts = [];
   const fcRes = await api("/api/market/forecast").catch(() => null);

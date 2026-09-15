@@ -298,8 +298,7 @@ export async function drawPickKline() {
     data = await api("/api/kline?code=" + encodeURIComponent(st.code) + "&limit=" + limit);
   } catch (e) {
     if (msg) {
-      msg.textContent = "没有该标的的日K缓存（data/history/）：先跑一次荐股" +
-        "（荐股会把逐股日K 落到 data/cache/mech/），或先跑 stock3d pull。";
+      msg.textContent = "日K 取不到（东财与腾讯都失败）：检查网络，或先跑 python main.py stock3d pull。";
     }
     return;
   }

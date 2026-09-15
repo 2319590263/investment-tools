@@ -55,6 +55,8 @@ webserver  ← __main__（python -m webui）
    │     ├── flowview    交易流页面数据：流卡片 / 标的行 / 详情 / 机械检查（报价 → 盈亏 → 提醒 → 消息队列）
    │     └── flowapi     交易流的 HTTP 入口（webserver 只做分派，避免它继续膨胀）
    ├── quotes      行情取数：批量报价（东财，1 次请求）+ 当日分时（腾讯，60 秒缓存 + 串行限速）
+   ├── freshness   数据新鲜度：早于最近交易日的 pan / stock3d 快照**直接删除**（不进回收站），
+   │               保证事实包不会引用过期数据（测试用 AIPLAN_NO_PURGE=1 关闭）
    ├── overview    总控台数据：持仓 / 自选卡片、计划线、到价提醒（只读）
    │     └── pickrank  荐股榜：最新产物 → 行表（模型评分降序 + 打法筛选；兼容旧产物）
    ├── planlines   计划线口径：关键价位 + 计划 → 买点 / 减仓 / 止损 / 目标（报告页 / 总控台 / 跟踪页共用）
@@ -174,7 +176,8 @@ viewApi("report").refreshReports();
 
 ```
 GET  /api/state /holdings /account /models /reports /report /history /symbols
-     /market /market/forecast /plancheck /overview /alerts /kline /watchlist /trash /pick /pick/list
+     /market /market/forecast /plancheck /overview /alerts /watchlist /trash /pick /pick/list
+     /kline（先读 data/history 缓存，没有就自动拉取：东财 push2his → 腾讯前复权兜底）
      /pick/boards /pick/industry /tracklist /track/all /track /blob
      /models/default /models/profile /models/provider /ledger
      /flows /flow（?id=&code=）/flow/minutes（?id=&code=）
@@ -194,6 +197,7 @@ POST /api/holdings /account /models /alerts/clear /trash/restore /trash/purge /p
 | 目的 | 命令 |
 |---|---|
 | 静态自检（结构 / 语法 / 模块图 / 密钥 / CLI 基线 / 机械打分口径文件 sha256） | `python main.py check` |
+| 过期快照与回收站清理（用户数据维护动作，测试里用 AIPLAN_NO_PURGE=1 关掉） | `python -c "import sys;sys.path.insert(0,'src');from webui import freshness;print(freshness.purge_stale(force=True))"` |
 | 单元 + 接口回归（标准库 unittest） | `python main.py test` |
 | 重构前后接口对拍 | `python scripts/api_snapshot.py --out tmp/a.json` / `--compare tmp/a.json tmp/b.json` |
 | 桌面浏览器冒烟（九页渲染 + 重交互 + 0 报错） | `node tests/ui/ui_smoke.mjs` |

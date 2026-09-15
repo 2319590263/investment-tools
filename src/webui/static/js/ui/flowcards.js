@@ -48,7 +48,7 @@ function styleOptions(pick) {
 function planCell(t) {
   const plan = t["计划"] || {};
   if (!plan["产物路径"]) {
-    return '<div class="muted">还没有计划：点「重算」出第一份</div>';
+    return '<div class="muted">还没有计划：点「计算」出第一份</div>';
   }
   const bits = [plan["方向"] || "—",
                 (plan["置信度"] == null ? "" : "置信度 " + plan["置信度"]),
@@ -86,13 +86,17 @@ function targetRow(t) {
   html += '<td class="fl-row-act">' +
     '<button class="btn sm ghost" data-act="minutes" data-code="' + esc(code) + '">分时</button>' +
     '<button class="btn sm ghost" data-act="detail" data-code="' + esc(code) + '">详情</button>' +
-    '<button class="btn sm ghost" data-act="plan" data-code="' + esc(code) + '">重算</button>' +
+    '<button class="btn sm ghost" data-act="plan" data-code="' + esc(code) + '">计算</button>' +
     '<button class="btn sm ghost" data-act="check" data-code="' + esc(code) + '">体检</button>' +
     '<button class="btn sm ghost" data-act="setstyle" data-code="' + esc(code) + '">改打法</button>' +
     (t["状态"] === "进行中"
       ? '<button class="btn sm ghost" data-act="closetarget" data-code="' + esc(code) + '">结束</button>' : "") +
     '<button class="btn sm danger" data-act="remove" data-code="' + esc(code) + '">移除</button>' +
     "</td></tr>";
+  /* 分时图直接放在这只标的的行下面（批注 2）：买卖线 + 计划线，进页面就画（60 秒缓存） */
+  html += '<tr class="fl-chart-row"><td colspan="10">' +
+    '<canvas class="fl-chart" data-chart-code="' + esc(code) + '"></canvas>' +
+    '<div class="muted" data-chart-note="' + esc(code) + '">正在取分时 …</div></td></tr>';
   return html;
 }
 
@@ -147,7 +151,7 @@ export function flowCard(c) {
     "打法决定计划的时间尺度：超短线 1-3 日 / 短线 1-5 日 / 波段 2-6 周。</div></details>";
   html += '<div class="fl-act">' +
     '<button class="btn sm ghost" data-act="params">改流参数</button>' +
-    '<button class="btn sm" data-act="plan">全部重算计划</button>' +
+    '<button class="btn sm" data-act="plan">全部计算计划</button>' +
     (c["状态"] === "进行中" ? '<button class="btn sm ghost" data-act="close">结束整条流</button>' : "") +
     '<button class="btn sm danger" data-act="delete">删除流</button></div>';
   return html + "</div>";

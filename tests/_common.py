@@ -24,6 +24,7 @@ DATA = os.path.join(ROOT, "data")
 def child_env():
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
+    env["AIPLAN_NO_PURGE"] = "1"       # 测试不清理过期快照：那是用户数据的维护动作
     old = env.get("PYTHONPATH")
     env["PYTHONPATH"] = SRC + (os.pathsep + old if old else "")
     return env
