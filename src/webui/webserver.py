@@ -19,7 +19,7 @@ import threading
 import time
 import webbrowser
 
-from .archive import delete_pick, delete_plan_log, delete_report, latest_pick_bundle, latest_report, list_picks, list_reports, pick_bundle, plan_log_entries, report_bundle
+from .archive import delete_pick, delete_plan_log, delete_report, latest_pick_bundle, latest_report, list_picks, list_reports, pick_bundle, plan_log_entries, prune_reports, report_bundle
 from . import alerts as alerts_store
 from . import flowapi
 from .holdings_sync import CAPTCHA_ROOT, captcha_image, holdings_python, install_hint, submit_captcha_answer
@@ -27,13 +27,15 @@ from .jobs import JOBS, build_check_argv, build_run_argv, run_batch
 from .market import (build_market, build_state, build_symbols, latest_market_forecast,
                      load_kline, run_market_forecast)
 from .overview import build_overview
+from .flowbook import ledger_view
 from .paths import ACCOUNT_PATH, AIPLAN, DATA_DIR, MODELS_PATH, PICK_DIR, POOL_PATH, PYTHON, ROOT, STATIC_DIR, TRACKLIST_PATH, TRASH_DIR, TRASH_TTL_DAYS, WATCHLIST_PATH, aiplan, inside, num, read_text, rel, save_like
-from .pick import PICK_BOARD_TYPES, PICK_L1_INDUSTRIES, PICK_MAX_CANDIDATES, PICK_MAX_CONCEPTS, PICK_MODULES, PICK_PER_BOARD, pick_param
+from .pick import (PICK_MODEL_TOP, PICK_PAGE_TOP, PICK_POOL_SIZE, PICK_STYLES, pick_param)
 from .pick_run import pick_boards_bundle, pick_l1_subs, run_pick
 from .plancheck import plancheck_bundle, run_plan_check
 from .store import (load_account_bundle, load_holdings_bundle, load_models_bundle,
                     load_tracklist, load_watchlist, tracklist_add, tracklist_import_watchlist,
-                    tracklist_remove, set_default_profile, watchlist_add, watchlist_remove)
+                    tracklist_remove, save_profile, save_provider, set_default_profile,
+                    watchlist_add, watchlist_remove)
 from .track import delete_plan as delete_track_plan
 from .track import exec_summary as track_exec_summary
 from .track import save_exec as save_track_exec
@@ -254,7 +256,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/market":
             return self._json(build_market())
         if path == "/api/reports":
-            return self._json({"items": list_reports()})
+            prune = prune_reports()          # 每个标的只留最新一份（惰性、60 秒节流）
+            prune.pop("明细", None)
+            return self._json({"items": list_reports(), "清理": prune})
         if path == "/api/report":
             target = q.get("path", [None])[0]
             if not target:
@@ -291,12 +295,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/pick/list":
             return self._json({"items": list_picks(),
                                "目录": rel(PICK_DIR),
-                               "模块": [{"值": m, "周期": c} for m, c in PICK_MODULES],
-                               "板块类型": list(PICK_BOARD_TYPES),
-                               "每板块候选默认": PICK_PER_BOARD,
-                               "候选上限默认": PICK_MAX_CANDIDATES,
-                               "概念上限": PICK_MAX_CONCEPTS,
-                               "一级行业数": len(PICK_L1_INDUSTRIES)})
+                               "打法": [{"值": name, "周期": cycle} for name, cycle in PICK_STYLES],
+                               "候选池上限默认": PICK_POOL_SIZE,
+                               "送模型数量默认": PICK_MODEL_TOP,
+                               "推荐榜长度": PICK_PAGE_TOP,
+                               "扫描口径": "东财全 A 按成交额降序 → 排除规则 → 候选池"})
         if path == "/api/pick/boards":
             refresh = (q.get("refresh", ["0"])[0] or "0") in ("1", "true", "yes")
             return self._json(pick_boards_bundle(refresh))
@@ -336,6 +339,11 @@ class Handler(BaseHTTPRequestHandler):
                                "存在": os.path.exists(TRACKLIST_PATH),
                                "条目": load_tracklist(),
                                "原文": read_text(TRACKLIST_PATH)})
+        if path == "/api/ledger":
+            # 持仓页「交易明细」：交易台账只读视图（批注 4）
+            code = (q.get("code", [""])[0] or "").strip()
+            limit = (q.get("limit", ["500"])[0] or "500")
+            return self._json(ledger_view(code or None, limit))
         if path == "/api/track/all":
             refresh = (q.get("refresh", ["0"])[0] or "0") in ("1", "true", "yes")
             return self._json(build_track_overview(refresh=refresh))
@@ -431,6 +439,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._save_json_config(body, ACCOUNT_PATH, load_account_bundle)
         if path == "/api/models":
             return self._save_json_config(body, MODELS_PATH, load_models_bundle)
+        if path in ("/api/models/profile", "/api/models/provider"):
+            # 模型配置页的「添加 / 修改 / 删除」（批注 8、9）：写 config/模型配置.json，写前 .bak
+            action = (body.get("动作") or body.get("action") or "新增").strip()
+            data = body.get("数据") if isinstance(body.get("数据"), dict) else body
+            fn = save_profile if path.endswith("/profile") else save_provider
+            bundle, err = fn(action, data)
+            if err:
+                return self._err(err)
+            return self._json({"ok": True, "已写入": bundle.get("已写入"),
+                               "备份": bundle.get("备份"),
+                               "改动": bundle.get("改动") or [],
+                               "模型": bundle})
         if path == "/api/models/default":
             if "默认_profile" not in body and "profiles_by_phase" not in body:
                 return self._err("缺少 默认_profile 或 profiles_by_phase")
@@ -570,14 +590,14 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"ok": True, "id": job["id"], "命令": job["命令"]})
             elif kind == "pick":
                 opts = pick_param(body)
-                if not opts["industry"] and not opts["concepts"]:
-                    return self._err("请先筛选行业或概念：至少勾选一个行业细分或一个概念板块")
-                meta = {"label": "荐股", "模块": opts["modules"],
-                        "行业": [x["code"] for x in opts["industry"]],
-                        "概念": opts["concepts"], "排除": opts["exclude"]}
-                label = ("荐股（行业 %d 个 / 概念 %d 个，每板块 %d 只，候选上限 %d）"
-                         % (len(opts["industry"]), len(opts["concepts"]),
-                            opts["per_board"], opts["max_candidates"]))
+                if opts["model_top"] > opts["pool_size"]:
+                    return self._err("送模型的条数不能超过候选池上限"
+                                     "（候选池 %d / 送模型 %d）"
+                                     % (opts["pool_size"], opts["model_top"]))
+                meta = {"label": "荐股（全大盘）", "候选池": opts["pool_size"],
+                        "送模型": opts["model_top"], "排除": opts["exclude"]}
+                label = "荐股（全大盘：候选池 %d 只 → 送模型 %d 只 → 1 次模型调用）" % (
+                    opts["pool_size"], opts["model_top"])
                 job = JOBS.start(kind, [], meta, label=label,
                                  func=lambda log, ctl: run_pick(log, ctl, opts))
                 return self._json({"ok": True, "id": job["id"], "命令": job["命令"],

@@ -11,7 +11,7 @@ import unittest
 from _common import STATIC
 
 JS_DIR = os.path.join(STATIC, "js")
-VIEWS = ("console", "flow", "run", "report", "history", "holdings", "watch", "pick",
+VIEWS = ("console", "flow", "run", "report", "holdings", "watch", "pick",
          "models", "market")
 
 

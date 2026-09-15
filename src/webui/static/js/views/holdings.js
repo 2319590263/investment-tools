@@ -13,6 +13,47 @@ export async function loadHoldings() {
   renderHoldings(h);
   const a = await api("/api/account");
   renderAccount(a);
+  await loadLedger();
+}
+
+/* 交易明细（批注 4）：只读交易台账，按标的筛选。 */
+export async function loadLedger() {
+  const table = $("#ledger-table");
+  if (!table) return;
+  const sel = $("#ledger-code");
+  const code = (sel && sel.value) || "";
+  try {
+    const d = await api("/api/ledger?limit=300" + (code ? "&code=" + encodeURIComponent(code) : ""));
+    const opts = (d["标的"] || []).map(x =>
+      '<option value="' + esc(x["代码"]) + '"' + (x["代码"] === code ? " selected" : "") + ">" +
+      esc((x["名称"] || x["代码"]) + "（" + x["笔数"] + " 笔）") + "</option>").join("");
+    if (sel) sel.innerHTML = '<option value="">全部标的</option>' + opts;
+    $("#ledger-meta").textContent = d["存在"]
+      ? ("共 " + d["总数"] + " 笔 ｜ " + d["标的数"] + " 只标的 ｜ 台账更新 " +
+         (d["更新时间"] || "—") + " ｜ " + d["台账"])
+      : ("还没有台账文件：" + d["台账"] + "（用「同步同花顺」生成）");
+    const rows = d["行"] || [];
+    table.innerHTML = "<thead><tr><th>日期</th><th>时间</th><th>代码</th><th>名称</th>" +
+      "<th>方向</th><th class='num'>价格</th><th class='num'>数量</th><th class='num'>金额</th>" +
+      "<th>市场</th></tr></thead><tbody>" +
+      (rows.length ? rows.map(l => "<tr>" +
+        "<td>" + esc(l["日期"] || "—") + "</td><td>" + esc(l["时间"] || "") + "</td>" +
+        '<td class="mono">' + esc(l["代码"] || "") + "</td><td>" + esc(l["名称"] || "") + "</td>" +
+        "<td>" + (l["方向"] === "卖出" ? '<span class="down">卖出</span>'
+                                        : '<span class="up">买入</span>') + "</td>" +
+        '<td class="num">' + fmt(l["价格"], 3) + "</td>" +
+        '<td class="num">' + fmt(l["数量"], 0) + "</td>" +
+        '<td class="num">' + fmtMoney(l["金额"], 2) + "</td>" +
+        '<td class="muted">' + esc(l["市场"] || "") + "</td></tr>").join("")
+        : '<tr><td class="empty" colspan="9">' + esc(d["口径"] || "") + "</td></tr>") +
+      "</tbody>";
+    if (d["显示"] < d["总数"]) {
+      $("#ledger-meta").textContent += " ｜ 只显示最近 " + d["显示"] + " 笔";
+    }
+  } catch (e) {
+    table.innerHTML = '<tbody><tr><td class="empty" colspan="9">读取台账失败：' +
+      esc(e.message) + "</td></tr></tbody>";
+  }
 }
 
 export function renderHoldings(h) {
@@ -306,6 +347,10 @@ export async function stopHoldingsSync() {
 
 export function initHoldingsView() {
   $("#btn-account-save").addEventListener("click", saveAccount);
+  const ledgerBtn = $("#btn-ledger-reload");
+  if (ledgerBtn) ledgerBtn.addEventListener("click", loadLedger);
+  const ledgerSel = $("#ledger-code");
+  if (ledgerSel) ledgerSel.addEventListener("change", loadLedger);
   $("#btn-hold-save").addEventListener("click", saveHoldings);
   $("#btn-hold-sync").addEventListener("click", startHoldingsSync);
   $("#btn-hold-sync-stop").addEventListener("click", stopHoldingsSync);

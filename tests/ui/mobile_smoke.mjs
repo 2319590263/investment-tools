@@ -16,15 +16,14 @@ const VIEWPORTS = [
   { width: 430, height: 932 },
 ];
 const PRIMARY = ["console", "run", "report", "holdings"];
-const MORE = ["history", "watch", "pick", "models", "market"];
+const MORE = ["watch", "pick", "models", "market"];
 const CONTENT = {
   console: "#console-body .kv",
   run: "#console",
   report: "#report-struct .card",
-  history: "#hist-table tbody tr",
   holdings: "#hold-table tbody tr",
   watch: "#watch-table tbody tr",
-  pick: "#pick-panel-industry .pick-row",
+  pick: "#pick-scan-hint, #pick-result .card",
   models: "#provider-table tbody tr",
   market: "#market-body .card",
 };

@@ -32,6 +32,8 @@ ENDPOINTS = [
     "/api/track?code=600967",
     "/api/flows",
     "/api/flow?id=__missing__",
+    "/api/ledger?limit=5",
+    "/api/flow/minutes?id=__missing__&code=600967",
 ]
 
 VOLATILE_KEY = re.compile(r"(mtime|时间|生成|缓存|上次清理|扫描|用时|耗时|日期|现在|剩余天数|即将过期)")

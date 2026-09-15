@@ -37,7 +37,12 @@ webserver  ← __main__（python -m webui）
    ├── jobs        子进程任务：启动 / 增量日志 / 中断 / 诊断 / 批量
    ├── market      页面数据组装：快照、代码候选、K 线、大盘走势预测
    │     └── store ──┐
-   ├── pick_run    荐股取数与编排（东财抓取、缓存、模型点评）→ pick（纯逻辑）
+   ├── pick_run    荐股编排（全大盘）：扫描 → 机械打分 → 前 150 只交模型 → 落盘
+   │     ├── pick        荐股纯逻辑：常量 / 五档打法 / 排除规则 / 参数收敛 / 提示词 / 事实包 / Markdown
+   │     ├── mech        机械打分（严格照根目录《机器打分逻辑.txt》）：6 模块阈值 + 一票否决 + 缺失折算
+   │     ├── mechdata    机械打分的取数层：全市场扫描 / 逐股日K（东财→腾讯兜底）/ 财报 / 资金流 /
+   │     │               行业聚合 / ETF / 质押 / 北向 / 股东 / 龙虎榜 / 公告 / 板块热度（按自然日缓存）
+   │     └── mechtech    技术指标纯函数：SMA / MACD / RSI / 量能比 / 量价比 / 区间位置 / 超额收益
    ├── plancheck   报告实盘复核：实盘价 × 交易计划（机械判定 + 当前时段策略点评）
    ├── track       标的跟踪纯逻辑：适用交易日 / 执行记录 / 事实包 / Markdown / 产物读写
    │     ├── track_run   跟踪执行层：取数 → 一次研判档调用（可选复核档）→ 落盘
@@ -51,7 +56,7 @@ webserver  ← __main__（python -m webui）
    │     └── flowapi     交易流的 HTTP 入口（webserver 只做分派，避免它继续膨胀）
    ├── quotes      行情取数：批量报价（东财，1 次请求）+ 当日分时（腾讯，60 秒缓存 + 串行限速）
    ├── overview    总控台数据：持仓 / 自选卡片、计划线、到价提醒（只读）
-   │     └── pickrank  荐股榜：最新产物按股票去重合并 + 推荐度排序（纯函数）
+   │     └── pickrank  荐股榜：最新产物 → 行表（模型评分降序 + 打法筛选；兼容旧产物）
    ├── planlines   计划线口径：关键价位 + 计划 → 买点 / 减仓 / 止损 / 目标（报告页 / 总控台 / 跟踪页共用）
    ├── alerts      到价消息队列：data/ai/alerts.jsonl（保留最近 500 条）
    │     └── background  把 stock3d / pan 快照裁成「个股量价 + 大盘 + 板块」背景数据
@@ -96,10 +101,11 @@ main.js                入口：initNav + 各视图 init + 首屏刷新
   ├── ui/modal.js      模态框与确认框
   ├── ui/cards.js      报告 / 大盘共用的卡片原语
    ├── ui/kline.js      K 线绘制与缩放
-   ├── ui/pickfilter.js 荐股模块多选（记忆）+ 从榜单预填筛选区
+   ├── ui/pickcards.js  荐股推荐榜 / 一票否决 / 机械口径 / 候选池（只拼 HTML）
    ├── ui/trackcards.js 跟踪清单 / 计划摘要 / 执行录入表 / 历史时间线（只拼 HTML）
    ├── ui/flowcards.js  交易流卡片 / 开流表单 / 详情（成交 · 体检 · 事件 · 计划）
-   └── views/*.js       十个页面，各自渲染 + 注册（console 总控台、flow 交易流）
+   ├── ui/flowchart.js  交易流当日分时图（分时 + 均价 + 昨收 + 计划线 + 买卖点标记）
+   └── views/*.js       九个页面，各自渲染 + 注册（console 总控台、flow 交易流；历史页已下线）
 core/poller.js 自动刷新定时器（档位 / 交易时段 / 退避 / localStorage）；ui/stockcard.js 股票卡片与分时小图；
 mobile.css 仅作用于 body[data-shell="mobile"]，桌面版和 /m 共用同一份视图 DOM。
 ```
@@ -133,7 +139,7 @@ viewApi("report").refreshReports();
 3. **实盘复核**：`plancheck.build_plan_check` 读报告 + 取一次东财实时快照（失败按
    stock3d 缓存 → 报告内现价降级并标注来源），机械判定每条计划是否触发；点「生成当前时段点评」
    再走一次模型（研判档），产物落 `data/ai/plancheck/<日期>/`，不写回报告与配置。
-4. **总控台轮询**：前端按所选档位（10s ~ 10min）请求 `/api/overview?refresh=1`——每档 1 次东财批量报价，分时每标的最多 60 秒一次（分钟线每分钟才变）、同轮串行间隔 300ms；非交易时段不发请求，连续失败按 2 倍退避（上限 5 分钟）。同一份响应里 `pickrank` 把**最新一份**荐股产物组装成榜单：推荐度 = 机械分 + 首推加成（8/6/4，上限 100），同一只股票跨模块**合并成一行**（模块收进「模块列表」，模块筛选始终给全 4 个）；榜单代码并进**同一次**批量报价（只报价、不取分时，失败按产物快照价并标注）。
+4. **总控台轮询**：前端按所选档位（10s ~ 10min）请求 `/api/overview?refresh=1`——每档 1 次东财批量报价，分时每标的最多 60 秒一次（分钟线每分钟才变）、同轮串行间隔 300ms；非交易时段不发请求，连续失败按 2 倍退避（上限 5 分钟）。同一份响应里 `pickrank` 把**最新一份**荐股产物组装成榜单：推荐度 = **模型评分**（模型没点评的行按机械分排序并标注），打法筛选始终给全 5 档；旧版产物（按模块组织的 `候选`）仍能读，推荐度回退机械分；榜单代码并进**同一次**批量报价（只报价、不取分时，失败按产物快照价并标注）。
 5. **报告页卡片顺序**：`renderStruct()` 用槽位（slots）收集各卡片，最后一行决定顺序——K 线与关键价位 / 交易计划 / 关键价位 置顶，其余按原优先级排后。
 6. **到价消息队列**：每次「新触发」由 `overview` 追加一行到 `data/ai/alerts.jsonl`（保留最近 500 条），顶栏铃铛与控制台队列卡都读它；未读游标存 localStorage。
 7. **写回**：`store.py` 只写三个固定文件，写前 `paths.save_like()` 比较内容、必要时留 `.bak`
@@ -170,10 +176,10 @@ viewApi("report").refreshReports();
 GET  /api/state /holdings /account /models /reports /report /history /symbols
      /market /market/forecast /plancheck /overview /alerts /kline /watchlist /trash /pick /pick/list
      /pick/boards /pick/industry /tracklist /track/all /track /blob
-     /models/default
-     /flows /flow（?id=&code=）
+     /models/default /models/profile /models/provider /ledger
+     /flows /flow（?id=&code=）/flow/minutes（?id=&code=）
 POST /api/holdings /account /models /alerts/clear /trash/restore /trash/purge /pick/delete
-     /models/default
+     /models/default /models/profile /models/provider
      /report/delete /watchlist/add /watchlist/remove /watchlist
      /tracklist /tracklist/add /tracklist/remove /tracklist/import-watchlist
      /track/exec /track/delete
@@ -187,9 +193,9 @@ POST /api/holdings /account /models /alerts/clear /trash/restore /trash/purge /p
 
 | 目的 | 命令 |
 |---|---|
-| 静态自检（结构 / 语法 / 模块图 / 密钥 / CLI 基线） | `python main.py check` |
+| 静态自检（结构 / 语法 / 模块图 / 密钥 / CLI 基线 / 机械打分口径文件 sha256） | `python main.py check` |
 | 单元 + 接口回归（标准库 unittest） | `python main.py test` |
 | 重构前后接口对拍 | `python scripts/api_snapshot.py --out tmp/a.json` / `--compare tmp/a.json tmp/b.json` |
-| 桌面浏览器冒烟（十页渲染 + 重交互 + 0 报错） | `node tests/ui/ui_smoke.mjs` |
+| 桌面浏览器冒烟（九页渲染 + 重交互 + 0 报错） | `node tests/ui/ui_smoke.mjs` |
 | 手机浏览器冒烟（三视口 + 九页 + 无横向溢出 + 0 报错） | `node tests/ui/mobile_smoke.mjs` |
 | 打包源码 | `python scripts/build.py` |

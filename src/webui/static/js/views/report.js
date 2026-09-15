@@ -1,6 +1,6 @@
 /* 报告页：结构化面板、价位、情景、K 线与完整原文。 */
 import { api } from "../core/api.js";
-import { State, openReport, registerView } from "../core/app.js";
+import { State, openReport, registerView, showView, viewApi } from "../core/app.js";
 import { $, $$, badge, chip, dirColor, esc, fmt, fmtMoney, fmtPct, kindClass, num, sleep, toast } from "../core/util.js";
 import { card, kv, listOrEmpty, pill, renderScenarioSummary } from "../ui/cards.js";
 import { loadStructKline, sceneCards } from "../ui/kline.js";
@@ -16,28 +16,38 @@ export async function refreshReports() {
 export function renderReportPicker() {
   const sel = $("#report-pick");
   const cur = sel.value;
-  const items = State.reports;
+  const items = State.reports || [];
   let html = "";
-  const latest = {};
-  items.forEach(r => { if (!latest[r.phase]) latest[r.phase] = r; });
-  const phases = ["post", "live", "prep", "all"];
-  html += '<optgroup label="各时段最新">';
-  phases.forEach(p => {
-    if (latest[p]) html += '<option value="' + esc(latest[p]["json路径"]) + '">' +
-      "最新 · " + esc(latest[p]["phase标签"]) + " · " + esc(latest[p]["日期"]) + "</option>";
+  /* 每个标的只保留最新一份（服务端 prune_reports 维护），所以优先按标的列。 */
+  const latest = {}, order = [];
+  items.forEach(r => {
+    const code = ((r["摘要"] || {})["标的代码"]) || "（未知标的）";
+    if (!latest[code]) { latest[code] = r; order.push(code); }
   });
-  html += "</optgroup>";
+  if (order.length) {
+    html += '<optgroup label="按标的（每个标的只留最新一份）">';
+    order.forEach(code => {
+      const r = latest[code], s = r["摘要"] || {};
+      html += '<option value="' + esc(r["json路径"]) + '">' +
+        esc(s["标的名称"] || code) + " · " + esc(code) +
+        " · " + esc(r["phase标签"] || "") +
+        (s["方向"] ? " · " + esc(s["方向"]) : "") +
+        (s["交易日"] ? " · " + esc(s["交易日"]) : "") +
+        (r["过期"] ? "（已过期）" : "") + "</option>";
+    });
+    html += "</optgroup>";
+  }
+  const older = items.filter(r =>
+    latest[((r["摘要"] || {})["标的代码"]) || "（未知标的）"] !== r);
   const byDate = {};
-  items.forEach(r => { (byDate[r["日期"]] = byDate[r["日期"]] || []).push(r); });
+  older.forEach(r => { (byDate[r["日期"]] = byDate[r["日期"]] || []).push(r); });
   Object.keys(byDate).sort().reverse().forEach(d => {
-    html += '<optgroup label="' + esc(d) + '">';
+    html += '<optgroup label="更早（待清理）' + esc(d) + '">';
     byDate[d].forEach(r => {
       const s = r["摘要"] || {};
       html += '<option value="' + esc(r["json路径"]) + '">' +
         esc(r["时间戳"].slice(0, 2) + ":" + r["时间戳"].slice(2, 4) + ":" + r["时间戳"].slice(4)) + " · " +
-        esc(r["phase标签"]) + " · " + esc(s["标的名称"] || s["标的代码"] || "") +
-        (s["方向"] ? " · " + esc(s["方向"]) : "") +
-        (s["置信度"] != null ? "(" + s["置信度"] + ")" : "") + "</option>";
+        esc(r["phase标签"]) + " · " + esc(s["标的名称"] || s["标的代码"] || "") + "</option>";
     });
     html += "</optgroup>";
   });
@@ -45,6 +55,31 @@ export function renderReportPicker() {
   sel.innerHTML = html;
   if (cur && items.some(r => r["json路径"] === cur)) sel.value = cur;
 }
+
+/* 过期提醒（批注 3）：每个标的只保留最新一份报告，过期就在顶部提醒重新生成。 */
+export function renderStaleBar(b) {
+  const bar = $("#report-stale");
+  if (!bar) return;
+  const hit = (State.reports || []).find(r => r["json路径"] === b["json路径"]);
+  if (!hit || !hit["过期"]) {
+    bar.hidden = true;
+    bar.textContent = "";
+    return;
+  }
+  const code = ((b["摘要"] || {})["标的代码"]) || "";
+  bar.hidden = false;
+  bar.innerHTML = "<b>这份报告已过期</b>：" + esc(hit["过期说明"] || "") +
+    "。过时的报告会自动移入回收站（回收站保留 7 天），请重新研判这只标的。" +
+    (code ? '<button class="btn sm primary" id="btn-report-regen">重新研判 ' + esc(code) +
+      "</button>" : "");
+  const btn = $("#btn-report-regen");
+  if (btn) btn.addEventListener("click", () => {
+    const run = viewApi("run");
+    if (run.pickCode) run.pickCode(code);
+    showView("run");
+  });
+}
+
 
 export async function loadLatestReport(phase) {
   try {
@@ -61,6 +96,7 @@ export async function loadLatestReport(phase) {
 export function renderReport() {
   const b = State.report;
   if (!b) return;
+  renderStaleBar(b);
   $("#report-md").innerHTML = withToc(mdToHtml(b.md || ""));
   $("#json-pre").textContent = JSON.stringify(b.json, null, 1);
   $("#report-struct").innerHTML = renderStruct(b);

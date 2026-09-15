@@ -22,7 +22,7 @@ GET_KEYS = {
     "/api/market/forecast": ("forecast", "路径", "mtime"),
     "/api/trash": ("items", "目录", "过期天数", "上次清理"),
     "/api/pick": ("json路径", "md", "json", "mtime"),
-    "/api/pick/list": ("items", "目录", "每板块候选默认", "候选上限默认", "概念上限"),
+    "/api/pick/list": ("items", "目录", "打法", "候选池上限默认", "送模型数量默认"),
     "/api/watchlist": ("路径", "条目", "原文"),
     "/api/report": ("json路径", "摘要", "json", "md", "mtime"),
 }
@@ -82,9 +82,12 @@ class TestApiSmoke(unittest.TestCase):
         if status == 502:
             self.skipTest("东财接口不可用，跳过（降级路径由界面提示）")
         self.assertEqual(status, 200, body)
-        self.assertEqual(len(body["一级行业"]), 31)
-        self.assertTrue(body["概念"])
-        self.assertTrue(all("主题" in c for c in body["概念"]))
+        # 荐股已改为全大盘扫描：接口只返回板块行情供查看，不再做筛选
+        self.assertTrue(body["一级行业"])
+        self.assertIn("说明", body)
+        for row in body["一级行业"][:3]:
+            for field in ("代码", "名称", "涨跌幅_pct", "主力净流入_亿"):
+                self.assertIn(field, row)
 
     def test_path_escape_is_forbidden(self):
         for bad in ("../aiplan.py", "..%2Faiplan.py", "C:/Windows/win.ini"):
@@ -96,11 +99,13 @@ class TestApiSmoke(unittest.TestCase):
         status, body = self.server.get("/api/nope")
         self.assertEqual(status, 404)
 
-    def test_pick_job_requires_selection(self):
-        status, body = self.server.post("/api/jobs", {"kind": "pick"})
+    def test_pick_job_rejects_bad_scan_params(self):
+        """全大盘荐股不再要求选板块，但送模型条数不能大于候选池。"""
+        status, body = self.server.post("/api/jobs",
+                                        {"kind": "pick", "pool_size": 50, "model_top": 200})
         self.assertEqual(status, 400, body)
         self.assertFalse(body.get("ok", True))
-        self.assertIn("请先筛选", body.get("error", ""))
+        self.assertIn("候选池上限", body.get("error", ""))
 
     def test_cancel_unknown_job(self):
         status, body = self.server.post("/api/jobs/not-a-real-job/cancel", {})
@@ -150,28 +155,26 @@ class TestApiSmoke(unittest.TestCase):
                 self.assertIn(field, card)
 
     def test_overview_pick_rank(self):
-        """总控台荐股榜：结构完整、按推荐度降序；没有产物也要能读（不联网、不写盘）。"""
+        """总控台荐股榜：结构完整、按模型评分降序；没有产物也要能读（不联网、不写盘）。"""
         status, body = self.server.get("/api/overview")
         self.assertEqual(status, 200, body)
         pk = body["荐股"]
-        for key in ("产物", "口径", "行", "模块", "筛选树", "提示"):
+        for key in ("产物", "口径", "行", "打法", "提示"):
             self.assertIn(key, pk)
         self.assertIsInstance(pk["行"], list)
-        for key in ("行业", "概念", "未归类"):
-            self.assertIn(key, pk["筛选树"])
-        self.assertIn("推荐度", pk["口径"])
-        self.assertEqual([m["名称"] for m in pk["模块"]], ["短线", "波段", "中线", "长线"],
-                         "模块筛选必须始终给全 4 个")
+        self.assertIn("模型评分", pk["口径"])
+        self.assertEqual([m["名称"] for m in pk["打法"]][:5],
+                         ["超短线", "短线", "波段", "中线", "长线"],
+                         "打法筛选必须始终给全 5 档")
         codes = [r["代码"] for r in pk["行"]]
         self.assertEqual(len(codes), len(set(codes)), "榜单必须按股票去重合并")
         for row in pk["行"]:
-            for field in ("代码", "名称", "模块", "一级行业", "推荐度", "机械分",
+            for field in ("代码", "名称", "打法", "推荐度", "机械分",
                           "价格来源", "现价", "是否持仓", "是否自选"):
                 self.assertIn(field, row)
-            self.assertLessEqual(row["推荐度"] or 0, 100)
         if len(pk["行"]) > 1:
             scores = [r["推荐度"] for r in pk["行"] if r["推荐度"] is not None]
-            self.assertEqual(scores, sorted(scores, reverse=True), "榜单必须按推荐度降序")
+            self.assertEqual(scores, sorted(scores, reverse=True), "榜单必须按评分降序")
         # refresh=1 在没有外网时也必须 200（报价降级不影响榜单结构）
         status2, body2 = self.server.get("/api/overview?refresh=1")
         self.assertEqual(status2, 200, body2)

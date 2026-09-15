@@ -4,7 +4,6 @@ import { bindMobileNav, closeMobileMore, initMobileShell } from "./core/mobile.j
 import { $, $$ } from "./core/util.js";
 import { closeModal } from "./ui/modal.js";
 import { initConsoleView } from "./views/console.js";
-import { loadHistory, loadTrash, purgeTrashNow } from "./views/history.js";
 import { initHoldingsView } from "./views/holdings.js";
 import { loadMarket } from "./views/market.js";
 import { checkModel, saveModels } from "./views/models.js";
@@ -24,11 +23,6 @@ export function initNav() {
     closeMobileMore();
     closeModal();
   });
-  $("#btn-hist-reload").addEventListener("click", loadHistory);
-  const trashBtn = $("#btn-trash-reload");
-  if (trashBtn) trashBtn.addEventListener("click", loadTrash);
-  const trashPurge = $("#btn-trash-purge");
-  if (trashPurge) trashPurge.addEventListener("click", purgeTrashNow);
   $("#btn-market-reload").addEventListener("click", loadMarket);
   $("#btn-model-check").addEventListener("click", checkModel);
   $("#btn-models-save").addEventListener("click", saveModels);

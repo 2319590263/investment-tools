@@ -1,255 +1,122 @@
 # -*- coding: utf-8 -*-
-"""荐股与写回逻辑里的纯函数（不起服务、不联网、不花钱）。
+"""荐股纯逻辑（全大盘版）：参数收敛、打法归一、排除规则、事实包与 Markdown。"""
 
-覆盖：筛选参数整理与越界夹取、板块主题归类、排除规则、机械打分单调性、
-路径越界保护、配置文件写回（先校验、先备份）。
-"""
-
-import json
-import os
-import shutil
-import tempfile
 import unittest
 
-from _common import ROOT, import_module
-
-
-def stock(**kw):
-    base = {"f12": "600000", "f14": "浦发银行", "f2": 10.0, "f3": 1.0, "f6": 3e8,
-            "f109": 2.0, "f110": 3.0, "f160": 1.0, "f24": 5.0, "f25": 8.0}
-    base.update(kw)
-    return base
-
-
-class _FakeHandler:
-    """只借 _save_json_config 的返回值，不碰真实 HTTP 层。"""
-
-    @staticmethod
-    def _err(msg, code=400):
-        return {"code": code, "err": msg}
-
-    @staticmethod
-    def _json(obj, code=200):
-        return obj
+from _common import import_module
 
 
 class TestPickParams(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.mod = import_module("pick")
+        cls.pick = import_module("pick")
 
-    def test_defaults_when_empty(self):
-        p = self.mod.pick_param({})
-        self.assertEqual(p["modules"], ["短线"])          # 模块多选，空值回退第一个
-        self.assertEqual(p["industry"], [])
-        self.assertEqual(p["concepts"], [])
-        self.assertEqual(p["per_board"], 5)
-        self.assertEqual(p["max_candidates"], 400)
-        self.assertEqual(p["max_chars"], 40000)
-        self.assertEqual(p["exclude"], {"st": True, "new": True, "low_price": True,
-                                        "low_amount": True, "skip_688_bj": False})
+    def test_defaults(self):
+        opts = self.pick.pick_param({})
+        self.assertEqual(opts["pool_size"], 400)
+        self.assertEqual(opts["model_top"], 150)
+        self.assertEqual(opts["max_chars"], 40000)
+        self.assertTrue(opts["exclude"]["st"])
+        self.assertFalse(opts["exclude"]["skip_688_bj"])
+        self.assertIsNone(opts["profile"])
 
-    def test_modules_multi_select(self):
-        # 去重 + 按固定顺序（短线→波段→中线→长线）
-        self.assertEqual(self.mod.pick_param({"modules": ["长线", "中线", "不存在", "长线"]})["modules"],
-                         ["中线", "长线"])
-        # module 与 modules 合并
-        self.assertEqual(self.mod.pick_param({"module": "波段", "modules": ["长线"]})["modules"],
-                         ["波段", "长线"])
-        # 四个一起选也在（上限就是 4 个模块）
-        self.assertEqual(self.mod.pick_param({"modules": ["长线", "短线", "中线", "波段"]})["modules"],
-                         ["短线", "波段", "中线", "长线"])
-        # 全非法时回退默认
-        self.assertEqual(self.mod.pick_param({"modules": ["不存在"]})["modules"], ["短线"])
+    def test_clamps_and_ignores_legacy_keys(self):
+        opts = self.pick.pick_param({"pool_size": 9, "model_top": 9999, "max_chars": 1,
+                                     "module": "短线", "industry": [{"code": "BK1036"}],
+                                     "concepts": ["BK1000"], "per_board": 5})
+        self.assertEqual(opts["pool_size"], 40)         # 下限 40
+        self.assertEqual(opts["model_top"], 400)        # 上限 400
+        self.assertEqual(opts["max_chars"], 4000)       # 下限 4000
+        self.assertNotIn("modules", opts)
+        self.assertNotIn("industry", opts)
+        self.assertNotIn("concepts", opts)
 
-    def test_module_picks_one_module_per_stock(self):
-        """四模块合并只留 total 只，且每只股票只归一个模块。"""
-        row = lambda c, s: {"代码": c, "机械分": s}          # noqa: E731
-        scored = {
-            "短线": [row("600001", 99.0), row("600002", 98.0), row("600010", 60.0)],
-            "波段": [row("600003", 90.0), row("600004", 88.0), row("600005", 86.0)],
-            "中线": [row("600006", 80.0), row("600007", 79.0), row("600008", 78.0)],
-            "长线": [row("600009", 70.0), row("600011", 69.0), row("600012", 68.0)],
-        }
-        mods = ["短线", "波段", "中线", "长线"]
-        self.assertEqual(self.mod.PICK_PAGE_TOP, 30)         # 总榜固定 30 只（不是每模块 30）
-        assign = self.mod.pick_module_picks(scored, mods, total=10, floor=2)
-        self.assertEqual(len(assign), 10)                    # 总名额受 total 约束
-        self.assertEqual(set(assign), set(assign.keys()))    # 每只股票只出现一次
-        self.assertEqual(set(assign.values()), set(mods))    # 四个模块都要有货（保底）
-        self.assertEqual(assign["600001"], "短线")
-        self.assertEqual(assign["600009"], "长线")
-        self.assertNotIn("600012", assign)                   # total=10 时最后一名的长线股进不来
-        small = self.mod.pick_module_picks(scored, mods, total=4, floor=1)
-        self.assertEqual(len(small), 4)
-        self.assertEqual(set(small.values()), set(mods))
-        self.assertEqual(self.mod.pick_module_picks({}, ["短线"], total=5, floor=2), {})
-        self.assertEqual(self.mod.pick_module_picks({"短线": [{"代码": "600001", "机械分": None}]},
-                                                   ["短线"], total=5, floor=2), {"600001": "短线"})
-
-    def test_clamps_out_of_range(self):
-        p = self.mod.pick_param({"per_board": 0, "max_candidates": 99999, "max_chars": 10})
-        self.assertEqual(p["per_board"], 1)
-        self.assertEqual(p["max_candidates"], 2000)
-        self.assertEqual(p["max_chars"], 4000)
-        p = self.mod.pick_param({"per_board": "abc", "max_candidates": None})
-        self.assertEqual((p["per_board"], p["max_candidates"]), (5, 400))
-
-    def test_industry_and_concept_normalisation(self):
-        p = self.mod.pick_param({
-            "industry": [{"code": "bk1201", "name": "电子", "subs": [" 半导体 ", ""]},
-                         {"code": "bad", "name": "无效板块"},
-                         {"code": "BK1201", "name": "重复"}],
-            "concepts": ["bk0999", "BAD", "bk0999", "bk1000"],
-        })
-        self.assertEqual([x["code"] for x in p["industry"]], ["BK1201"])
-        self.assertEqual(p["industry"][0]["subs"], ["半导体"])
-        self.assertEqual(p["concepts"], ["BK0999", "BK1000"])
-
-    def test_concept_limit(self):
-        codes = ["BK%04d" % i for i in range(200)]
-        self.assertEqual(len(self.mod.pick_param({"concepts": codes})["concepts"]),
-                         self.mod.PICK_MAX_CONCEPTS)
-
-
-class TestThemesAndExclude(unittest.TestCase):
-
-    @classmethod
-    def setUpClass(cls):
-        cls.mod = import_module("pick")
-
-    def test_concept_theme_samples(self):
-        cases = {"英伟达概念": "AI与算力", "半导体": "半导体与电子", "白酒Ⅲ": "消费与传媒",
-                 "昨日涨停": "打板与热度", "固态电池": "新能源与电力", "券商概念": "金融与地产",
-                 "低空经济": "军工与安全", "人形机器人": "机器人与智能制造",
-                 "减肥药": "医药与生物", "量子科技": "通信与卫星", "莫名其妙XYZ": "其他"}
-        for name, theme in cases.items():
-            self.assertEqual(self.mod.pick_concept_theme(name), theme, name)
-        self.assertIn(self.mod.PICK_THEME_OTHER, [self.mod.pick_concept_theme("某某")])
+    def test_style_normalisation(self):
+        p = self.pick
+        self.assertEqual(p.pick_style_of("超短线"), "超短线")
+        self.assertEqual(p.pick_style_of("短线（1-5 日）"), "短线")
+        self.assertEqual(p.pick_style_of("波段操作"), "波段")
+        self.assertEqual(p.pick_style_of("我没写"), "短线")      # 回退默认
+        self.assertEqual(p.pick_style_of(""), "短线")
+        self.assertEqual([n for n, _c in p.PICK_STYLES],
+                         ["超短线", "短线", "波段", "中线", "长线"])
 
     def test_exclude_rules(self):
-        m = self.mod
-        ex = {"st": True, "new": True, "low_price": True, "low_amount": True, "skip_688_bj": False}
-        self.assertIsNone(m.pick_exclude_reason(stock(), ex))
-        self.assertEqual(m.pick_exclude_reason(stock(f14="ST 天成"), ex), "ST")
-        self.assertEqual(m.pick_exclude_reason(stock(f14="*ST 海投"), ex), "ST")
-        self.assertEqual(m.pick_exclude_reason(stock(f3="-"), ex), "无行情/停牌")
-        self.assertEqual(m.pick_exclude_reason(stock(f2=1.8), ex), "低价股")
-        self.assertEqual(m.pick_exclude_reason(stock(f6=1e7), ex), "成交额过低")
-        new = stock(f24=12.0, f25=12.0, f109=12.0, f110=12.0, f160=12.0)
-        self.assertEqual(m.pick_exclude_reason(new, ex), "次新/上市不足60日")
-        self.assertEqual(m.pick_exclude_reason(stock(f12="688260"), dict(ex, skip_688_bj=True)),
-                         "科创板/北交所")
-
-    def test_exclude_can_be_disabled(self):
-        m = self.mod
-        off = {"st": False, "new": False, "low_price": False,
-               "low_amount": False, "skip_688_bj": False}
-        for row in (stock(f14="ST 天成"), stock(f2=1.8), stock(f6=1e7),
-                    stock(f24=12.0, f25=12.0, f109=12.0, f110=12.0, f160=12.0)):
-            self.assertIsNone(m.pick_exclude_reason(row, off))
+        p = self.pick
+        ex = {"st": True, "new": True, "low_price": True, "low_amount": True,
+              "skip_688_bj": False}
+        self.assertEqual(p.pick_exclude_reason({"f14": "*ST 海投", "f2": 5, "f6": 1e9,
+                                                "f3": 1}, ex), "ST")
+        self.assertEqual(p.pick_exclude_reason({"f14": "A", "f2": 1.5, "f6": 1e9,
+                                                "f3": 1}, ex), "低价股")
+        self.assertEqual(p.pick_exclude_reason({"f14": "A", "f2": 10, "f6": 1e7,
+                                                "f3": 1}, ex), "成交额过低")
+        self.assertIsNone(p.pick_exclude_reason({"f14": "A", "f2": 10, "f6": 1e9,
+                                                 "f3": 1, "f24": 5, "f25": 6,
+                                                 "f109": 3, "f110": 2, "f160": 1}, ex))
+        self.assertEqual(p.pick_exclude_reason({"f14": "A", "f2": 10, "f6": 1e9, "f3": 1,
+                                                "f12": "688111", "f24": 5, "f25": 6,
+                                                "f109": 3, "f110": 2, "f160": 1},
+                                               dict(ex, skip_688_bj=True)), "科创板/北交所")
 
 
-class TestScoring(unittest.TestCase):
+class TestFactpack(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.mod = import_module("pick")
+        cls.pick = import_module("pick")
 
-    def test_board_score_is_monotone(self):
-        rows = [stock(f3=1, f109=1, f110=1, f160=1, f184=1, f62=1e8, f104=10, f105=2, f8=1, f6=1e9),
-                stock(f12="BK2", f3=9, f109=9, f110=9, f160=9, f184=9, f62=9e8, f104=30,
-                      f105=1, f8=9, f6=9e9)]
-        self.mod.pick_score_boards(rows)
-        self.assertGreater(rows[1]["机械分"], rows[0]["机械分"])
-        self.assertIn(rows[1]["评级"], ("强", "偏强"))
+    def _payload(self):
+        rows = [{"代码": "600967", "名称": "内蒙一机", "行业": "国防军工", "现价": 13.42,
+                 "涨跌幅_pct": 1.2, "成交额_亿": 5.1, "换手率_pct": 2.0, "量比": 1.1,
+                 "20日_pct": 3.0, "60日_pct": 8.0, "年初至今_pct": 12.0, "PE_TTM": 30.1,
+                 "PB": 2.1, "总市值_亿": 200.0, "自由流通市值_亿": 90.0,
+                 "主力净流入_万": 1200.0, "主力净占比_pct": 3.4, "ROE_pct": 11.2,
+                 "毛利率_pct": 30.0, "净利率_pct": 9.0, "营收同比_pct": 12.0,
+                 "净利同比_pct": 20.0, "资产负债率_pct": 45.0}]
+        return {
+            "生成时间": "2026-09-16 10:00:00", "交易日": "2026-09-15",
+            "扫描参数": {"候选池上限": 400, "送模型数量": 1}, "扫描": {"全市场总数": 5915,
+                                                        "候选池数量": 400, "排除统计": {}},
+            "市场环境": {"bond10y": 2.6, "amount5": 12000.0, "limitup5": 55.0},
+            "板块背景": {"行业": {"前10": [{"名称": "半导体", "涨跌幅_pct": 3.1}], "后10": []},
+                         "概念": {"前10": [{"名称": "算力", "涨跌幅_pct": 4.0}]}},
+            "候选池": rows,
+            "候选技术": {"600967": {"MA20距离_pct": 1.2, "MACD": 3, "RSI14": 55.0,
+                                     "换手10日_pct": 2.2, "主力10日_万": 3400.0,
+                                     "龙虎榜": 0, "质押比例_pct": 0.0, "北向变动_pp": 0.1,
+                                     "股东户数集中度": 8.5, "十大流通占比_pct": 55.0}},
+            "降级": ["没有 pan 快照"], "机械口径": {"缺失": [{"指标": "X", "满分": 3}]},
+        }
 
-    def test_stock_score_is_monotone_for_every_module(self):
-        rows = []
-        for i in range(6):
-            r = stock(f12="60000%d" % i, f3=i, f109=i, f110=i, f160=i, f24=i * 3, f25=i * 2,
-                      f184=i, f62=i * 1e7, f8=i + 0.5, f10=i + 0.2, f7=i + 1, f6=(i + 1) * 1e8,
-                      f21=(i + 1) * 1e10, f20=(i + 1) * 2e10, f115=(i + 1) * 10, f23=(i + 1) * 1.5)
-            r["板块分"] = 50 + i
-            rows.append(r)
-        for module in ("短线", "波段", "中线", "长线"):
-            self.mod.pick_score_stocks(rows, module)
-            scores = [r["机械分"] for r in rows]
-            self.assertEqual(scores, sorted(scores), "%s 打分应随池内强度单调" % module)
-            self.assertTrue(all(s is not None for s in scores))
+    def test_factpack_has_no_mech_score(self):
+        txt = self.pick.pick_factpack(self._payload(), 40000)
+        self.assertIn("600967", txt)
+        self.assertIn("半导体", txt)
+        self.assertNotIn("机械分", txt, "机械分不能进事实包（避免锚定）")
+        self.assertNotIn("推荐度", txt)
 
-    def test_grade_thresholds(self):
-        g = self.mod.pick_grade
-        self.assertEqual(g(90), "强")
-        self.assertEqual(g(65), "偏强")
-        self.assertEqual(g(50), "中性")
-        self.assertEqual(g(10), "弱")
+    def test_factpack_trims_to_cap(self):
+        p = self._payload()
+        p["候选池"] = [dict(p["候选池"][0], 代码="6009%02d" % i) for i in range(150)]
+        txt = self.pick.pick_factpack(p, 6000)
+        self.assertLess(len(txt), 6000 * 3, "超预算时应逐条截断")
 
-
-class TestPathGuardAndWriteback(unittest.TestCase):
-
-    @classmethod
-    def setUpClass(cls):
-        cls.HTTP = import_module("webserver")
-        cls.P = import_module("paths")
-
-    def test_inside_guard(self):
-        inside = self.P.inside
-        data = os.path.join(ROOT, "data")
-        self.assertTrue(inside(os.path.join(data, "ai", "x.json"), data))
-        self.assertFalse(inside(os.path.join(ROOT, "账户配置.json"), data))
-        self.assertFalse(inside(os.path.join(data, "..", "aiplan.py"), data))
-
-    def test_json_writeback_validates_then_backs_up(self):
-        tmp = tempfile.mkdtemp(prefix="aiplan_writeback_")
-        path = os.path.join(tmp, "账户配置.json")
-        original = json.dumps({"总资金": 1, "说明": "原始"}, ensure_ascii=False, indent=1)
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write(original)
-        orig_const, self.HTTP.ACCOUNT_PATH = self.HTTP.ACCOUNT_PATH, path
-        try:
-            handler = _FakeHandler()
-            r = self.HTTP.Handler._save_json_config(handler, {"text": "{不是 JSON"}, path, lambda: None)
-            self.assertIn("不是合法 JSON", r["err"])
-            with open(path, encoding="utf-8") as fh:
-                self.assertEqual(fh.read(), original, "非法 JSON 不能改动原文件")
-
-            r = self.HTTP.Handler._save_json_config(handler, {"text": '{"总资金": 0}'}, path, lambda: None)
-            self.assertIn("总资金", r["err"])
-            with open(path, encoding="utf-8") as fh:
-                self.assertEqual(fh.read(), original)
-
-            r = self.HTTP.Handler._save_json_config(handler, {"text": '{"总资金": 12345}'},
-                                                    path, lambda: {"总资金": 12345})
-            self.assertTrue(r["ok"])
-            self.assertIsNotNone(r["备份"])
-            with open(path, encoding="utf-8") as fh:
-                self.assertEqual(json.load(fh)["总资金"], 12345)
-            with open(path + ".bak", encoding="utf-8") as fh:
-                self.assertEqual(fh.read(), original, ".bak 应是写入前的原文")
-        finally:
-            self.HTTP.ACCOUNT_PATH = orig_const
-            shutil.rmtree(tmp, ignore_errors=True)
-
-    def test_models_writeback_requires_providers_and_profiles(self):
-        tmp = tempfile.mkdtemp(prefix="aiplan_models_")
-        path = os.path.join(tmp, "模型配置.json")
-        with open(path, "w", encoding="utf-8") as fh:
-            fh.write("{}")
-        orig_const, self.HTTP.MODELS_PATH = self.HTTP.MODELS_PATH, path
-        try:
-            handler = _FakeHandler()
-            r = self.HTTP.Handler._save_json_config(
-                handler, {"text": '{"providers": [], "profiles": {}}'}, path, lambda: None)
-            self.assertIn("providers", r["err"])
-            r = self.HTTP.Handler._save_json_config(
-                handler, {"text": '{"providers": [{"名称": "x"}], "profiles": {}}'}, path, lambda: None)
-            self.assertIn("profiles", r["err"])
-        finally:
-            self.HTTP.MODELS_PATH = orig_const
-            shutil.rmtree(tmp, ignore_errors=True)
+    def test_markdown_contains_rank_and_caliber(self):
+        p = self._payload()
+        p["推荐榜"] = [{"排名": 1, "代码": "600967", "名称": "内蒙一机", "打法": "短线",
+                        "评分": 88, "评级": "关注", "机械分": 70.0, "现价": 13.42,
+                        "涨跌幅_pct": 1.2, "所属板块": "国防军工", "理由": "主力连续流入"}]
+        p["机械层"] = [{"代码": "600967", "名称": "内蒙一机", "机械分": 70.0,
+                        "实得": 62.0, "可得": 89.0}]
+        p["被否决"] = [{"阶段": "全池", "代码": "000001", "名称": "平安银行", "原因": "ST"}]
+        md = self.pick.pick_markdown(p)
+        self.assertIn("推荐榜", md)
+        self.assertIn("内蒙一机", md)
+        self.assertIn("一票否决", md)
+        self.assertIn("不构成投资建议", md)
 
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main()

@@ -141,6 +141,19 @@ def handle_get(handler, path, q):
             return True
         handler._json(data)
         return True
+    if path == "/api/flow/minutes":
+        fid = (q.get("id", [""])[0] or "").strip()
+        code = (q.get("code", [""])[0] or "").strip()
+        if not fid or not code:
+            handler._err("缺少 id（交易流编号）或 code（标的代码）", 400)
+            return True
+        refresh = (q.get("refresh", ["0"])[0] or "0") in ("1", "true", "yes")
+        data, err = flowview.minutes(fid, code, refresh=refresh)
+        if err:
+            handler._err(err, 404)
+            return True
+        handler._json(data)
+        return True
     return False
 
 

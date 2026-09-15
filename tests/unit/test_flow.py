@@ -352,7 +352,9 @@ class TestMarks(Fixture):
         self.assertEqual(items[0]["流编号"], doc["流编号"])
         self.assertIn("点位类型", items[0])
         # 换了日期要重新提醒
-        self.assertTrue(self.f.due_alerts(node, today="2026-09-16"))
+        # 不能用「今天」「明天」这类跟真实日历挂钩的日期：真实日期正好走到那天时，
+        # 去重状态里的日期与查询日期相同，会误判成「已提醒过」。用一个远期日期。
+        self.assertTrue(self.f.due_alerts(node, today="2099-01-04"))
 
     def test_next_action(self):
         node = self.with_plan(self.target(self.flow()))

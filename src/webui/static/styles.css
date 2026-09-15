@@ -631,6 +631,13 @@ input.inline-input:focus { outline: none; border-color: var(--accent); }
 .fl-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 8px; }
 .fl-tab-bodies { display: flex; flex-direction: column; gap: 6px; }
 
+/* ---- 交易流：当日分时图（买卖点 + 计划线） ---- */
+.fl-chart-box { position: relative; margin: 6px 0 10px; }
+.fl-chart { width: 100%; display: block; background: #141a21; border: 1px solid var(--line);
+  border-radius: 6px; cursor: crosshair; }
+.fl-chart-tip { margin-top: 4px; font-size: 12px; }
+.fl-min-refresh { margin-left: 8px; }
+
 /* ---- 运行页：多选标的 ---- */
 .code-picked { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 .code-picked .chip { display: inline-flex; align-items: center; gap: 6px; }

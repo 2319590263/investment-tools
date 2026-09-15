@@ -191,8 +191,49 @@ def detail(fid, quote_map=None, refresh=False, today=None, code=None):
             "事件": list(reversed(doc.get("事件") or []))[:40]}, None
 
 
+def minutes(fid, code, refresh=False):
+    """单只标的的当日分时 + 成交点 + 计划线（只读，不写盘）。
+
+    分时走腾讯（quotes.fetch_minutes：60 秒缓存 + 300ms 串行限速），报价走一次
+    东财批量（5 秒缓存）；计划线沿用卡片存下来的「关键价位」结构，前端用同一份
+    planprices.js 收敛成精确价位，避免第二套解析口径。
+    """
+    from . import quotes as quotes_mod
+    doc, err = flow.load_flow(fid)
+    if err:
+        return None, err
+    node, terr = flow.find_target(doc, code)
+    if node is None:
+        return None, terr
+    c6 = aiplan.code6(node.get("代码") or "")
+    quote, hints = quotes_mod.fetch_quotes([c6], refresh=refresh)
+    q = (quote or {}).get(c6) or {}
+    minute = quotes_mod.fetch_minutes(c6, refresh=refresh)
+    hints = list(hints or [])
+    if minute is None:
+        hints.append("分时取不到（北交所 / 停牌 / 网络）：只显示报价与计划线")
+    fills = []
+    for f in (node.get("成交") or []):
+        price = num(f.get("价格"))
+        if price is None:
+            continue
+        fills.append({"序号": f.get("序号"), "日期": f.get("日期"), "时间": f.get("时间"),
+                      "方向": f.get("方向"), "价格": price, "数量": num(f.get("数量")),
+                      "来源": f.get("来源"), "备注": f.get("备注")})
+    return {
+        "流编号": fid, "代码": c6, "名称": node.get("名称") or c6,
+        "打法": node.get("打法") or flow.DEFAULT_STYLE,
+        "分时": minute, "分时日期": str(session_of()["现在"])[:10],
+        "报价": q, "昨收": q.get("昨收"),
+        "关键价位": ((node.get("计划") or {}).get("关键价位")) or {},
+        "成交": fills, "提示": hints,
+        "口径": "分时=腾讯当日分钟线（60 秒缓存）｜报价=东财批量（5 秒缓存）｜买卖点=流内成交",
+    }, None
+
+
 def console_block(quote_map=None, refresh=False):
     """总控台用的紧凑卡区（一行 = 一只标的，最多 CONSOLE_ROWS 行）。"""
+    data = overview(quote_map, refresh=refresh, with_closed=False)
     data = overview(quote_map, refresh=refresh, with_closed=False)
     rows = []
     for card in data["流"]:

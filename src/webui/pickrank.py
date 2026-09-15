@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-"""总控台荐股榜：把最新一份荐股产物组装成「推荐度降序 + 两级筛选树」的行表。
+"""总控台荐股榜：最新一份产物 → 「模型评分降序 + 打法筛选」的行表。
 
-纯函数为主，只有 build_rank() 读一次最新产物 JSON；行情不在这里取——
-overview 把榜单代码并进同一次东财批量请求，取不到时回退产物快照价。
+兼容两种产物：
+  · 新版（全大盘）：读 推荐榜[]（模型评分 + 打法 + 理由），机械分只作辅助列；
+  · 旧版（板块筛选版）：读 候选{模块: [...]}，推荐度回退机械分，打法显示「未定」。
+行情不在这里取：overview 把榜单代码并进同一次东财批量请求，取不到就留产物快照价。
 """
 
 import os
@@ -10,175 +12,94 @@ import time
 
 from .archive import latest_pick_path
 from .paths import aiplan, num, rel
-from .pick import PICK_MODULES, pick_concept_theme
+from .pick import PICK_STYLES, pick_style_of
 
-RANK_BONUS = (8.0, 6.0, 4.0)        # 模型首推第 1/2/3 名的推荐度加成
-RANK_CAP = 100.0                    # 推荐度上限
-STALE_DAYS = 3                      # 产物超过几天就在页面上提醒
-OTHER_L1 = "未归类"
-RANK_NOTE = ("推荐度 = 机械分 + 模型首推加成（首推第 1/2/3 名 +8/+6/+4，上限 100）；"
-             "机械分是候选池内分位打分，不是收益预测")
+STALE_DAYS = 3
+FACET_OTHER = "未定"
+RANK_NOTE = ("排名看模型评分（0-100，模型给的推荐分）；机械分是按《机器打分逻辑.txt》"
+             "算的辅助参考，不参与排名")
 
 
-def rank_bonus(place):
-    """首推名次 → 推荐度加成；非首推（None / 越界）返回 0。"""
-    if not isinstance(place, int) or place < 1 or place > len(RANK_BONUS):
-        return 0.0
-    return RANK_BONUS[place - 1]
-
-
-def recommend_score(mechanic, place):
-    """推荐度 = min(100, 机械分 + 加成)；机械分缺失时给 None（排最后）。"""
-    value = num(mechanic)
-    if value is None:
-        return None
-    return round(min(RANK_CAP, value + rank_bonus(place)), 1)
-
-
-def board_l1_map(doc):
-    """产物板块表 → {细分板块名: 一级行业名}，用来把候选归到一级行业。"""
-    out = {}
-    for row in (doc.get("板块") or {}).get("行业") or []:
-        name = str(row.get("名称") or "").strip()
-        l1 = str(row.get("一级行业") or "").strip()
-        if name and l1:
-            out[name] = l1
-    return out
-
-
-def first_picks(doc):
-    """模型层首推 → {(模块, 代码): (名次, 首推条目)}；没有模型点评时为空。"""
-    model = ((doc.get("模型层") or {}).get("json") or {})
-    mods = model.get("模块") or doc.get("模块") or []
-    out = {}
-    for item in mods or []:
-        module = str(item.get("模块") or "").strip()
-        if not module:
-            continue
-        for idx, pick in enumerate(item.get("首推") or [], start=1):
-            code = aiplan.code6(pick.get("代码"))
+def build_rows(doc, held=None, watch=None):
+    """产物 → 榜单行（模型分降序）。"""
+    held, watch = set(held or ()), set(watch or ())
+    rows = []
+    rank = doc.get("推荐榜") or []
+    if rank:
+        for item in rank:
+            code = aiplan.code6(str(item.get("代码") or ""))
             if code:
-                out[(module, code)] = (idx, pick)
-    return out
+                rows.append(_new_row(item, code, held, watch))
+    else:
+        for _module, items in (doc.get("候选") or {}).items():
+            for it in items or []:
+                code = aiplan.code6(str(it.get("代码") or ""))
+                if code:
+                    rows.append(_old_row(it, code, held, watch))
+    rows.sort(key=sort_key)
+    return rows
 
 
-def price_slot(pick, key):
-    """首推里的价位块：关注买点 / 止损 / 目标位（取第一个）。"""
-    if not pick:
-        return None
-    if key == "目标位":
-        goals = pick.get("目标位") or []
-        return goals[0] if goals else None
-    return pick.get(key) or None
+def _new_row(item, code, held, watch):
+    score = num(item.get("评分"))
+    raw_style = str(item.get("打法") or "").strip()
+    if not raw_style or raw_style == FACET_OTHER or score is None:
+        style = FACET_OTHER
+    else:
+        style = pick_style_of(raw_style)
+    return {
+        "代码": code, "名称": item.get("名称"), "打法": style,
+        "推荐度": score, "模型分": score, "机械分": num(item.get("机械分")),
+        "评级": item.get("评级"), "理由": item.get("理由"),
+        "所属板块": item.get("所属板块") or item.get("行业"), "行业": item.get("行业"),
+        "排名": num(item.get("排名")),
+        "产物现价": num(item.get("现价")), "现价": num(item.get("现价")),
+        "涨跌幅_pct": num(item.get("涨跌幅_pct")),
+        "换手率_pct": num(item.get("换手率_pct")), "量比": num(item.get("量比")),
+        "主力净流入_万": num(item.get("主力净流入_万")),
+        "主力净占比_pct": num(item.get("主力净占比_pct")),
+        "价格来源": "产物快照", "价格时间": None,
+        "是否持仓": code in held, "是否自选": code in watch,
+        "行来源": item.get("来源") or "模型",
+    }
+
+
+def _old_row(it, code, held, watch):
+    """旧产物（板块筛选版）：只有机械分，没有模型评分与打法。"""
+    return {
+        "代码": code, "名称": it.get("名称"), "打法": FACET_OTHER,
+        "推荐度": num(it.get("机械分")), "模型分": None, "机械分": num(it.get("机械分")),
+        "评级": it.get("评级"), "理由": None,
+        "所属板块": it.get("来源板块") or it.get("所属行业"), "行业": it.get("所属行业"),
+        "排名": None,
+        "产物现价": num(it.get("现价")), "现价": num(it.get("现价")),
+        "涨跌幅_pct": num(it.get("涨跌幅_pct")),
+        "换手率_pct": num(it.get("换手率_pct")), "量比": num(it.get("量比")),
+        "主力净流入_万": None if num(it.get("主力净流入_亿")) is None
+                          else round(num(it.get("主力净流入_亿")) * 1e4, 2),
+        "主力净占比_pct": num(it.get("主力净占比_pct")),
+        "价格来源": "产物快照", "价格时间": None,
+        "是否持仓": code in held, "是否自选": code in watch,
+        "行来源": "旧产物",
+    }
 
 
 def sort_key(row):
     return (-(row.get("推荐度") if row.get("推荐度") is not None else -1.0),
             -(row.get("机械分") if row.get("机械分") is not None else -1.0),
-            -(row.get("产物涨跌幅_pct") if row.get("产物涨跌幅_pct") is not None else -1e9),
             str(row.get("代码") or ""))
 
 
-def build_rows(doc, held=None, watch=None):
-    """产物 → 榜单行（同一只股票跨模块合并成一行，按推荐度降序）。
-
-    首推价位是模型给的文本，原样透传；合并时取推荐度最高的那条作为主行。
-    """
-    l1_map = board_l1_map(doc)
-    firsts = first_picks(doc)
-    held, watch = set(held or ()), set(watch or ())
-    rows = []
-    for module, items in (doc.get("候选") or {}).items():
-        for it in items or []:
-            code = aiplan.code6(it.get("代码"))
-            if not code:
-                continue
-            place, pick = firsts.get((module, code), (None, None))
-            mechanic = num(it.get("机械分"))
-            kind = str(it.get("板块类型") or "").strip()
-            source = str(it.get("来源板块") or "").strip()
-            own = str(it.get("所属行业") or "").strip()
-            sub = source if kind == "行业" else (own or source)
-            rows.append({
-                "代码": code, "名称": it.get("名称"), "模块": module,
-                "板块类型": kind or None, "来源板块": source or None,
-                "细分": sub or None, "所属行业": own or None,
-                "一级行业": l1_map.get(sub) or l1_map.get(source) or OTHER_L1,
-                "概念主题": pick_concept_theme(source) if kind == "概念" else None,
-                "机械分": mechanic, "评级": it.get("评级"),
-                "首推名次": place, "加成": rank_bonus(place),
-                "推荐度": recommend_score(mechanic, place),
-                "产物现价": num(it.get("现价")),
-                "产物涨跌幅_pct": num(it.get("涨跌幅_pct")),
-                "换手率_pct": num(it.get("换手率_pct")), "量比": num(it.get("量比")),
-                "主力净流入_亿": num(it.get("主力净流入_亿")),
-                "现价": num(it.get("现价")), "涨跌幅_pct": num(it.get("涨跌幅_pct")),
-                "价格来源": "产物快照", "价格时间": None,
-                "买点": price_slot(pick, "关注买点"), "止损": price_slot(pick, "止损"),
-                "止盈点": price_slot(pick, "目标位"),
-                "止盈点数": len((pick or {}).get("目标位") or []),
-                "首推理由": (pick or {}).get("理由"), "首推评级": (pick or {}).get("评级"),
-                "是否持仓": code in held, "是否自选": code in watch,
-            })
-    rows = merge_by_code(rows)
-    rows.sort(key=sort_key)
-    return rows
-
-
-def merge_by_code(rows):
-    """同一只股票在多个模块上榜 → 合成一行：推荐度最高的当主行，模块收进「模块列表」。"""
-    best, modules = {}, {}
-    for row in rows:
-        code = row.get("代码")
-        modules.setdefault(code, {})[row.get("模块")] = True
-        cur = best.get(code)
-        if cur is None or sort_key(row) < sort_key(cur):
-            best[code] = row
-    out = []
-    for code, row in best.items():
-        names = [name for name, _ in PICK_MODULES if modules.get(code, {}).get(name)]
-        merged = dict(row)
-        merged["模块列表"] = names or [row.get("模块")]
-        merged["模块数"] = len(merged["模块列表"])
-        out.append(merged)
-    return out
-
-
-def facet_modules(rows):
-    """模块筛选：**始终**给全部 4 个模块，产物里没有候选的标 0（前端置灰）。"""
+def facet_styles(rows):
+    """打法筛选：五档固定顺序，只有真的有候选时才可点；另有「未定」。"""
     counts = {}
     for row in rows:
-        for name in row.get("模块列表") or [row.get("模块")]:
-            counts[name] = counts.get(name, 0) + 1
-    return [{"名称": name, "候选数": counts.get(name, 0)} for name, _ in PICK_MODULES]
-
-
-def facet_tree(rows):
-    """行 → 两级筛选树（只保留有候选的节点）。"""
-    ind, con, other = {}, {}, {}
-    for row in rows:
-        l1 = row.get("一级行业") or OTHER_L1
-        sub = row.get("细分") or row.get("来源板块") or "未知板块"
-        if l1 == OTHER_L1:
-            other[sub] = other.get(sub, 0) + 1
-        else:
-            ind.setdefault(l1, {})
-            ind[l1][sub] = ind[l1].get(sub, 0) + 1
-        if row.get("板块类型") == "概念":
-            theme = row.get("概念主题") or "其他"
-            name = row.get("来源板块") or "未知概念"
-            con.setdefault(theme, {})
-            con[theme][name] = con[theme].get(name, 0) + 1
-    return {"行业": _two_level(ind), "概念": _two_level(con),
-            "未归类": [{"名称": k, "候选数": v} for k, v in sorted(other.items())]}
-
-
-def _two_level(bucket):
-    out = []
-    for name in sorted(bucket, key=lambda x: (-sum(bucket[x].values()), x)):
-        subs = [{"名称": k, "候选数": v} for k, v in
-                sorted(bucket[name].items(), key=lambda kv: (-kv[1], kv[0]))]
-        out.append({"名称": name, "候选数": sum(bucket[name].values()), "子项": subs})
+        name = row.get("打法") or FACET_OTHER
+        counts[name] = counts.get(name, 0) + 1
+    out = [{"名称": name, "周期": cycle, "候选数": counts.get(name, 0)}
+           for name, cycle in PICK_STYLES]
+    if counts.get(FACET_OTHER):
+        out.append({"名称": FACET_OTHER, "周期": "", "候选数": counts[FACET_OTHER]})
     return out
 
 
@@ -198,10 +119,8 @@ def apply_quotes(rows, quote_map, refresh=False):
 
 
 def empty_rank(note=None):
-    return {"产物": None, "口径": RANK_NOTE, "行": [],
-            "筛选树": {"行业": [], "概念": [], "未归类": []},
-            "模块": facet_modules([]),
-            "提示": [note or "还没有荐股结果（data/ai/pick/）：去「荐股」页选板块跑一次"]}
+    return {"产物": None, "口径": RANK_NOTE, "行": [], "打法": facet_styles([]),
+            "提示": [note or "还没有荐股结果（data/ai/pick/）：去「荐股」页跑一次全大盘扫描"]}
 
 
 def build_rank(held=None, watch=None):
@@ -218,25 +137,27 @@ def build_rank(held=None, watch=None):
         mtime = None
     days = None if mtime is None else max(0, int((time.time() - mtime) // 86400))
     if days is not None and days >= STALE_DAYS:
-        tips.append("产物是 %d 天前的（%s）：价格会实时刷新，但结论与价位仍是那天的"
+        tips.append("产物是 %d 天前的（%s）：价格会实时刷新，但评分与理由仍是那天的"
                     % (days, time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime))))
-    modules = ((doc.get("参数") or {}).get("模块")) or []
-    missing = [name for name, _ in PICK_MODULES if name not in modules]
-    if missing:
-        tips.append("本次产物只覆盖「%s」，%s没有候选：去「荐股」页把这 4 个模块都勾上重跑就能看全"
-                    % ("/".join(modules) or "—", "、".join(missing)))
+    if not (doc.get("推荐榜") or []):
+        tips.append("这份产物没有模型推荐榜（旧版产物或模型失败）：榜单按机械分排序，"
+                    "去「荐股」页重跑一次就能拿到模型评分")
+    model = doc.get("模型层") or {}
+    if model.get("error"):
+        tips.append("本次模型失败：%s（已按机械分排序）" % str(model["error"])[:120])
     md = os.path.splitext(path)[0] + ".md"
     return {
         "产物": {
             "json路径": rel(path), "md路径": rel(md) if os.path.exists(md) else None,
             "生成时间": doc.get("生成时间"), "交易日": doc.get("交易日"),
-            "模块": modules, "筛选": (doc.get("参数") or {}).get("筛选") or {},
+            "扫描": doc.get("扫描") or {}, "扫描参数": doc.get("扫描参数") or {},
+            "机械口径": doc.get("机械口径") or {},
+            "被否决": len(doc.get("被否决") or []),
             "模型": {"profile": (doc.get("配置") or {}).get("profile"),
                      "model": (doc.get("配置") or {}).get("model")},
             "成本": doc.get("成本") or {}, "降级": doc.get("降级") or [],
             "产物时间": None if mtime is None else time.strftime("%Y-%m-%d %H:%M", time.localtime(mtime)),
             "天数": days,
         },
-        "口径": RANK_NOTE, "行": rows, "筛选树": facet_tree(rows), "提示": tips,
-        "模块": facet_modules(rows),
+        "口径": RANK_NOTE, "行": rows, "打法": facet_styles(rows), "提示": tips,
     }

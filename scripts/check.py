@@ -30,6 +30,8 @@ JS_DIR = os.path.join(STATIC, "js")
 TEST_DIR = os.path.join(ROOT, "tests")
 FROZEN = ("aiplan.py", "pan.py", "stock3d.py")
 BASELINE = os.path.join(ROOT, "scripts", "cli_baseline.json")
+SPEC_FILE = "机器打分逻辑.txt"
+SPEC_BASELINE = os.path.join(ROOT, "scripts", "spec_baseline.json")
 SKIP_DIRS = {".git", "data", "build", "tmp", "__pycache__", "node_modules", ".trash",
              ".idea", ".vscode", ".pytest_cache", ".ruff_cache", ".venv", ".venv-holdings"}
 TEXT_EXT = {".py", ".js", ".mjs", ".css", ".html", ".json", ".md", ".txt", ".cmd",
@@ -38,8 +40,9 @@ PY_MAX_LINES = 800
 JS_MAX_LINES = 900
 
 PACKAGE_MODULES = ("__init__.py", "__main__.py", "paths.py", "sources.py", "store.py",
-                      "archive.py", "market.py", "jobs.py", "pick.py", "pick_run.py",
-                   "pickrank.py", "background.py", "plancheck.py", "planlines.py", "quotes.py",
+                   "archive.py", "market.py", "jobs.py", "pick.py", "pick_run.py",
+                   "pickrank.py", "mech.py", "mechdata.py", "mechtech.py",
+                   "background.py", "plancheck.py", "planlines.py", "quotes.py",
                    "overview.py",
                    "alerts.py", "trash.py", "track.py", "track_run.py", "trackview.py",
                    "flow.py", "flowbook.py", "flow_run.py", "flowview.py",
@@ -48,12 +51,12 @@ PACKAGE_MODULES = ("__init__.py", "__main__.py", "paths.py", "sources.py", "stor
 JS_MODULES = ("main.js", "core/util.js", "core/api.js", "core/app.js", "core/poller.js",
               "core/mobile.js",
                   "ui/markdown.js", "ui/jsontree.js", "ui/modal.js", "ui/cards.js", "ui/kline.js",
-                  "ui/stockcard.js", "ui/planprices.js", "ui/pickfilter.js", "ui/pickcards.js",
-                  "ui/trackcards.js", "ui/flowcards.js",
-              "views/run.js", "views/report.js", "views/history.js", "views/holdings.js",
+                  "ui/stockcard.js", "ui/planprices.js", "ui/pickcards.js",
+                 "ui/trackcards.js", "ui/flowcards.js", "ui/flowchart.js",
+             "views/run.js", "views/report.js", "views/holdings.js",
               "views/watch.js", "views/pick.js", "views/models.js", "views/market.js",
               "views/flow.js")
-VIEWS = ("console", "flow", "run", "report", "history", "holdings", "watch", "pick",
+VIEWS = ("console", "flow", "run", "report", "holdings", "watch", "pick",
          "models", "market")
 
 FAILS = []
@@ -294,6 +297,13 @@ def check_frozen(update=False):
             json.dump({"说明": "三个 CLI 的 sha256 基线；只有走查过才用 --update-baseline 重登记。",
                        "文件": current}, fh, ensure_ascii=False, indent=1, sort_keys=True)
             fh.write("\n")
+        spec_path = os.path.join(ROOT, SPEC_FILE)
+        if os.path.isfile(spec_path):
+            with io.open(SPEC_BASELINE, "w", encoding="utf-8", newline="\n") as fh:
+                json.dump({"说明": "机械打分口径文件的 sha256；改口径必须显式重登记。",
+                           "文件": {SPEC_FILE: sha256(spec_path)}},
+                          fh, ensure_ascii=False, indent=1, sort_keys=True)
+                fh.write("\n")
         ok("已重新登记基线 scripts/cli_baseline.json")
         return
     if not os.path.isfile(BASELINE):
@@ -309,6 +319,26 @@ def check_frozen(update=False):
             ok("%s 与基线一致" % name)
 
 
+def check_spec():
+    """机械打分的口径文件：必须存在，并登记 sha256（口径改动要显式重登记）。"""
+    print("[6] 机械打分口径文件")
+    path = os.path.join(ROOT, SPEC_FILE)
+    if not os.path.isfile(path):
+        bad("缺少口径文件 %s（机械打分严格照它实现）" % SPEC_FILE)
+        return
+    ok("口径文件在根目录 %s（%d 字节）" % (SPEC_FILE, os.path.getsize(path)))
+    current = sha256(path)
+    if not os.path.isfile(SPEC_BASELINE):
+        bad("缺少 %s（用 python scripts/check.py --update-baseline 生成）"
+            % os.path.relpath(SPEC_BASELINE, ROOT))
+        return
+    base = (json.loads(read(SPEC_BASELINE)) or {}).get("文件") or {}
+    if base.get(SPEC_FILE) != current:
+        bad("%s 与基线不一致（改口径就用 --update-baseline 重新登记）" % SPEC_FILE)
+    else:
+        ok("%s 与基线一致" % SPEC_FILE)
+
+
 def main():
     ap = argparse.ArgumentParser(description="项目静态自检")
     ap.add_argument("--update-baseline", action="store_true",
@@ -320,6 +350,7 @@ def main():
     check_frontend()
     check_secrets()
     check_frozen(update=args.update_baseline)
+    check_spec()
     if FAILS:
         print("\n结果：FAIL（%d 项）" % len(FAILS))
         return 1

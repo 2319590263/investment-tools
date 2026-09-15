@@ -15,7 +15,7 @@ import { mkdirSync } from "node:fs";
 const PORT = process.argv[2] || process.env.AIPLAN_WEBUI_PORT || "8765";
 const BASE = `http://127.0.0.1:${PORT}`;
 
-const VIEWS = ["console", "flow", "run", "report", "history", "holdings", "watch", "pick",
+const VIEWS = ["console", "flow", "run", "report", "holdings", "watch", "pick",
                "models", "market"];
 // 每个视图必须渲染出的真实内容（空壳页面不算通过）
 const CONTENT = {
@@ -23,10 +23,9 @@ const CONTENT = {
   flow: "#flow-list .flow-card, #flow-list .empty",
   run: "#console",
   report: "#report-struct .card",
-  history: "#hist-table tbody tr",
   holdings: "#hold-table tbody tr",
   watch: "#watch-table tbody tr",
-  pick: "#pick-panel-industry .pick-row",
+  pick: "#pick-result .card, #pick-scan-hint",
   models: "#provider-table tbody tr",
   market: "#market-body .card",
 };
@@ -126,10 +125,10 @@ for (const sel of ["#console-pick", "#console-pick-mods", "#btn-pick-goto"]) {
   console.log(`${found > 0 ? "PASS" : "FAIL"}  荐股榜控件 ${sel}`);
   if (!found) failed++;
 }
-const facetMods = await page.$$eval("#console-pick-mods button", els => els.map(e => e.dataset.rkMod));
-const fourMods = facetMods.join("/") === "短线/波段/中线/长线";
-console.log(`${fourMods ? "PASS" : "FAIL"}  模块始终给全 4 个（${facetMods.join("/")}）`);
-if (!fourMods) failed++;
+const facetStyles = await page.$$eval("#console-pick-mods button", els => els.map(e => e.dataset.rkStyle));
+const fiveStyles = facetStyles.slice(0, 5).join("/") === "超短线/短线/波段/中线/长线";
+console.log(`${fiveStyles ? "PASS" : "FAIL"}  打法筛选始终给全 5 档（${facetStyles.join("/")}）`);
+if (!fiveStyles) failed++;
 const noExtraFilter = await page.locator("#console-pick-l1, #console-pick-theme, #btn-pick-reset").count();
 console.log(`${noExtraFilter === 0 ? "PASS" : "FAIL"}  榜单不再有行业/概念筛选（多余控件 ${noExtraFilter} 个）`);
 if (noExtraFilter !== 0) failed++;
@@ -143,11 +142,14 @@ const rkOk = rkRows > 0 || /还没有荐股结果/.test(rkText);
 console.log(`${rkOk ? "PASS" : "FAIL"}  荐股榜渲染（${rkRows} 行）`);
 if (!rkOk) failed++;
 if (rkRows > 0) {
-  const planLine = await page.locator("#console-pick tr.rk-plan").first()
-    .innerText({ timeout: 5000 }).catch(() => "");
-  const hasPlan = /买点/.test(planLine) && /止损/.test(planLine) && /止盈点/.test(planLine) && !/~/.test(planLine);
-  console.log(`${hasPlan ? "PASS" : "FAIL"}  首推行带买点/止损/止盈点且无区间（${planLine.slice(0, 40)}…）`);
-  if (!hasPlan) failed++;
+  const rkHead = await page.locator("#console-pick table.tbl thead").innerText().catch(() => "");
+  const colOk = /模型评分/.test(rkHead) && /机械分/.test(rkHead) && /打法/.test(rkHead);
+  console.log(`${colOk ? "PASS" : "FAIL"}  榜单列头含 模型评分 / 机械分 / 打法（${rkHead.replace(/\s+/g, " ").slice(0, 60)}）`);
+  if (!colOk) failed++;
+  const styleChips = await page.locator("#console-pick table.tbl tbody tr .chip").allInnerTexts().catch(() => []);
+  const styleOk = styleChips.some(x => ["超短线", "短线", "波段", "中线", "长线", "未定"].includes(x.trim()));
+  console.log(`${styleOk ? "PASS" : "FAIL"}  榜单行带打法标签`);
+  if (!styleOk) failed++;
   const codes = await page.$$eval("#console-pick table.tbl tbody tr:not(.rk-plan) .rk-code",
     els => els.map(e => e.dataset.code));
   const dedupOk = codes.length > 0 && new Set(codes).size === codes.length;
@@ -288,60 +290,50 @@ if (!kline.card) {
   console.log("INFO  K 线卡片存在，但没有可用的日K缓存（页面会显示提示文案，属正常）");
 }
 
-/* ---- 荐股页模块多选：可同时点亮、至少留一个、记忆到 localStorage ---- */
-await page.evaluate(() => localStorage.removeItem("aiplan.pick.modules"));
-await page.reload({ waitUntil: "domcontentloaded" });
-await page.waitForSelector("#view-console.active", { timeout: 20000 });
+/* ---- 荐股页（全大盘）：扫描参数 + 推荐榜；已删掉行业/概念筛选与模块矩阵 ---- */
 await gotoView("pick");
-const modsOn = () => page.$$eval("#pick-modules button.on", els => els.map(e => e.dataset.module));
-const defMods = await modsOn();
-console.log(`${defMods.length === 1 && defMods[0] === "短线" ? "PASS" : "FAIL"}  模块默认勾选（${defMods.join("/")}）`);
-if (!(defMods.length === 1 && defMods[0] === "短线")) failed++;
-await page.click('#pick-modules button[data-module="波段"]');
-const twoMods = await modsOn();
-const stored = await page.evaluate(() => localStorage.getItem("aiplan.pick.modules") || "");
-const multiOk = twoMods.length === 2 && twoMods.includes("短线") && twoMods.includes("波段") && /波段/.test(stored);
-console.log(`${multiOk ? "PASS" : "FAIL"}  模块可多选且写入 localStorage（${twoMods.join("/")}）`);
-if (!multiOk) failed++;
-await page.click('#pick-modules button[data-module="短线"]');
-await page.click('#pick-modules button[data-module="波段"]');   // 取消最后一个应被拦下
-const leftMods = await modsOn();
-console.log(`${leftMods.length === 1 ? "PASS" : "FAIL"}  至少保留一个模块（${leftMods.join("/")}）`);
-if (leftMods.length !== 1) failed++;
-
-/* ---- 荐股页深度检查：勾选一个行业会更新预估文案 ---- */
-await gotoView("pick");
-const box = page.locator("#pick-panel-industry input[data-ind]").first();
-if (await box.count()) {
-  const before = await page.textContent("#pick-sel-count");
-  await box.check();
-  const after = await page.textContent("#pick-sel-count");
-  const ok = before !== after && /[1-9]/.test(after || "");
-  console.log(`${ok ? "PASS" : "FAIL"}  荐股筛选联动（${before} -> ${after}）`);
-  if (!ok) failed++;
-} else {
-  console.log("FAIL  荐股页没有渲染出可勾选的行业");
-  failed++;
+for (const sel of ["#pick-pool-size", "#pick-model-top", "#pick-scan-hint", "#btn-pick-run",
+                   "#btn-pick-stop", "#btn-pick-history"]) {
+  const found = await page.locator(sel).count();
+  console.log(`${found > 0 ? "PASS" : "FAIL"}  荐股页扫描参数控件 ${sel}`);
+  if (!found) failed++;
 }
+const legacyPick = await page.locator("#pick-modules, #pick-panel-industry, #pick-panel-concept, " +
+  "#pick-tabs, [id^='pick-mod-']").count();
+console.log(`${legacyPick === 0 ? "PASS" : "FAIL"}  荐股页已无模块 / 行业 / 概念筛选与矩阵（残留 ${legacyPick}）`);
+if (legacyPick !== 0) failed++;
+await page.waitForSelector("#pick-result .card", { timeout: 25000 }).catch(() => {});
+const pickText = await page.locator("#pick-result").innerText().catch(() => "");
+const rankRows = await page.locator("#pick-rank tbody tr").count();
+console.log(`${rankRows > 0 ? "PASS" : "FAIL"}  推荐榜已渲染（${rankRows} 行）`);
+if (!(rankRows > 0)) failed++;
+const rankHeads = await page.locator("#pick-rank thead").innerText().catch(() => "");
+const headOk = /模型评分/.test(rankHeads) && /机械分/.test(rankHeads) && /打法/.test(rankHeads);
+console.log(`${headOk ? "PASS" : "FAIL"}  推荐榜列头含 模型评分 / 机械分 / 打法`);
+if (!headOk) failed++;
+const noPrice = !/买点|止损价|目标位/.test(pickText);
+console.log(`${noPrice ? "PASS" : "FAIL"}  模型不给买卖价位（页面无买点/止损/目标位）`);
+if (!noPrice) failed++;
+const mechCard = /机械分（辅助）/.test(pickText) && /《机器打分逻辑.txt》/.test(pickText);
+console.log(`${mechCard ? "PASS" : "FAIL"}  机械口径卡（可得满分 / 缺失项 / 口径来源）`);
+if (!mechCard) failed++;
+const vetoCard = /一票否决/.test(pickText);
+console.log(`${vetoCard ? "PASS" : "FAIL"}  一票否决卡（执行范围与未覆盖项）`);
+if (!vetoCard) failed++;
+const styleRow = await page.locator("#pick-rank tbody tr .chip").allInnerTexts().catch(() => []);
+const styleInRank = styleRow.some(x =>
+  ["超短线", "短线", "波段", "中线", "长线", "未定"].includes(x.trim()));
+console.log(`${styleInRank ? "PASS" : "FAIL"}  推荐榜每行带打法标签`);
+if (!styleInRank) failed++;
 
-/* ---- 荐股结果页：候选榜是四模块合并后的一张表（≤30 只） ---- */
-await page.waitForSelector("#pick-cand", { timeout: 25000 }).catch(() => {});
-const candRows = await page.locator("#pick-cand tbody tr").count();
+/* ---- 荐股结果：推荐榜 30 只以内 + 候选池表 + 机械层 ---- */
+const candRows = await page.locator("#pick-rank tbody tr").count();
 const candOk = candRows > 0 && candRows <= 30;
-console.log(`${candOk ? "PASS" : "FAIL"}  候选榜只有一张合并表（${candRows} 行，四模块合计）`);
+console.log(`${candOk ? "PASS" : "FAIL"}  推荐榜长度 ≤ 30（${candRows} 行）`);
 if (!candOk) failed++;
-const perModuleTables = await page.locator('#pick-result .card[id^="pick-mod-"] table.tbl tbody tr').count();
-console.log(`${perModuleTables === 0 ? "PASS" : "FAIL"}  不再按模块各列一遍候选（模块卡里的候选行 ${perModuleTables}）`);
-if (perModuleTables !== 0) failed++;
-const hasPriceCol = await page.locator('#pick-cand tbody tr td.wrap').count();
-console.log(`${hasPriceCol > 0 ? "PASS" : "FAIL"}  候选榜带精确价位列（${hasPriceCol} 行有）`);
-if (!hasPriceCol) failed++;
-/* 每只股票只归一个模块（模块列只有一个模块标签） */
-const multiModRows = await page.evaluate(() => Array.from(
-  document.querySelectorAll("#pick-cand tbody tr"))
-  .filter(tr => tr.children[2] && tr.children[2].querySelectorAll(".chip").length > 1).length);
-console.log(`${multiModRows === 0 ? "PASS" : "FAIL"}  候选榜一票一模块（多模块行 ${multiModRows}）`);
-if (multiModRows !== 0) failed++;
+const poolRows = await page.locator("#pick-result .card:last-of-type tbody tr").count();
+console.log(`${poolRows > 0 ? "PASS" : "FAIL"}  候选池表已渲染（${poolRows} 行）`);
+if (!(poolRows > 0)) failed++;
 
 
 /* ---- 交易流页：盯盘控件 + 流卡区 + 开流表单 + 详情（不点「体检 / 重算」，不打模型） ---- */
@@ -417,18 +409,26 @@ await page.waitForFunction(() => {
   const el = document.querySelector("#default-profile");
   return el && el.options.length > 0;
 }, null, { timeout: 20000 }).catch(() => {});
-for (const sel of ["#default-profile", "#btn-default-save", "#default-phase-prep",
-                   "#default-phase-post", "#default-phase-all"]) {
+for (const sel of ["#default-profile", "#btn-default-save", "#btn-profile-add", "#btn-provider-add"]) {
   const found = await page.locator(sel).count();
   console.log(`${found > 0 ? "PASS" : "FAIL"}  模型配置控件 ${sel}`);
   if (!found) failed++;
 }
+/* 批注 10：盘前 / 盘中 / 盘后 / 全时段四个下拉已下线 */
+const phaseSel = await page.locator("[id^='default-phase-']").count();
+console.log(`${phaseSel === 0 ? "PASS" : "FAIL"}  时段下拉已删除（残留 ${phaseSel}）`);
+if (phaseSel !== 0) failed++;
+/* 批注 11：没配 key 的服务商显示「未配置」，不再显示借用 token.txt 的掩码 */
+const provText = await page.locator("#provider-table").innerText().catch(() => "");
+console.log(`${provText.includes("未配置") || provText.includes("已配置") ? "PASS" : "FAIL"}  provider 表显示 key 配置状态`);
+if (!(provText.includes("未配置") || provText.includes("已配置"))) failed++;
 const profileOptions = await page.locator("#default-profile option").count();
 console.log(`${profileOptions >= 2 ? "PASS" : "FAIL"}  默认 profile 可选档位数（${profileOptions}）`);
 if (profileOptions < 2) failed++;
-const phaseOptions = await page.locator("#default-phase-post option").count();
-console.log(`${phaseOptions === profileOptions + 1 ? "PASS" : "FAIL"}  按时间段含「跟随默认」（${phaseOptions}）`);
-if (phaseOptions !== profileOptions + 1) failed++;
+/* profile 卡片上的增删改按钮（批注 8、9）：每档都有「编辑 / 另存为 / 删除」 */
+const profBtns = await page.locator("#profile-grid [data-edit-profile]").count();
+console.log(`${profBtns > 0 ? "PASS" : "FAIL"}  profile 卡片带编辑按钮（${profBtns}）`);
+if (!(profBtns > 0)) failed++;
 
 /* ---- 运行研判：标的代码多选（输入 / 加入 / 移除） ---- */
 await gotoView("run");

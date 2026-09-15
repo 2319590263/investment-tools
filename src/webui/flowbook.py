@@ -646,3 +646,56 @@ def add_check(node, result, note="", model=None, usage=None, cost=None, error=No
         level = "warn"
     events_append(node, "体检", "体检：%s —— %s" % (rec["结论"], rec["一句话"] or "（无结论）"), level)
     return rec
+
+
+# ---------------------------------------------------------------------------
+# 交易台账（只读）：持仓页的「交易明细」卡
+# ---------------------------------------------------------------------------
+
+LEDGER_VIEW_LIMIT = 500
+
+
+def ledger_view(code=None, limit=LEDGER_VIEW_LIMIT):
+    """台账 → 页面用的成交明细（只读，不写盘）。
+
+    台账由同花顺「同步持仓」写入 data/user/交易台账.md（列口径见 holdings_sync），
+    这里只解析展示：不做去重合并、不改文件。
+    """
+    import time
+    from .paths import read_text
+    c6 = aiplan.code6(code) if code else None
+    try:
+        mtime = os.path.getmtime(LEDGER_PATH)
+    except OSError:
+        mtime = 0.0
+    rows, summary = [], {}
+    for row in parse_ledger(read_text(LEDGER_PATH)):
+        row_code = aiplan.code6(row.get("代码"))
+        price, qty = num(row.get("成交价格")), num(row.get("成交数量"))
+        amount = num(row.get("成交金额"))
+        if amount is None and price is not None and qty is not None:
+            amount = round(price * qty, 2)
+        item = {"日期": row.get("日期"), "时间": row.get("时间"),
+                "代码": row_code, "名称": row.get("名称"), "方向": row.get("方向"),
+                "价格": price, "数量": qty, "金额": amount,
+                "市场": row.get("交易市场"), "委托序号": row.get("委托序号")}
+        rows.append(item)
+        hit = summary.get(row_code)
+        if hit is None:
+            summary[row_code] = {"代码": row_code, "名称": row.get("名称"), "笔数": 1}
+        else:
+            hit["笔数"] += 1
+    if c6:
+        rows = [r for r in rows if r["代码"] == c6]
+    rows.reverse()                      # 最新成交排在最前
+    try:
+        limit = max(1, min(int(limit or LEDGER_VIEW_LIMIT), 2000))
+    except (TypeError, ValueError):
+        limit = LEDGER_VIEW_LIMIT
+    total = len(rows)
+    return {"行": rows[:limit], "总数": total, "显示": min(limit, total),
+            "台账": rel(LEDGER_PATH), "存在": os.path.exists(LEDGER_PATH),
+            "更新时间": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime)) if mtime else None,
+            "标的数": len(summary),
+            "标的": [summary[k] for k in sorted(summary, key=lambda x: (-summary[x]["笔数"], x or ""))],
+            "口径": "台账由「同步同花顺」写入 data/user/交易台账.md；这里只读不写"}

@@ -1,21 +1,27 @@
 # -*- coding: utf-8 -*-
-"""荐股的纯逻辑：常量、机械打分、排除规则、参数整理、事实包与 Markdown。"""
+"""荐股的纯逻辑（全大盘版）：常量、排除规则、参数整理、提示词、事实包与 Markdown。
+
+排序口径（本版重做）：
+  · 候选池：东财全 A 按成交额降序 → 排除规则 → 前 400 只（mechdata.market_scan）；
+  · 机械分：严格照《机器打分逻辑.txt》对全池打分，只用来「初筛 + 辅助列 + 挑出前 150 只」；
+  · 模型分：模型对前 150 只给 0-100 推荐评分、一句话理由与适合打法（超短/短/波/中/长），
+    **30 只总榜按模型分排序**，模型分缺失时才回退机械分；
+  · 模型不给买卖价位（价位由用户自行研判），机械分也不进事实包（避免锚定）。
+"""
 
 import os
 import re
 
 from .paths import DATA_DIR, aiplan, pan
 
+PICK_STYLES = (("超短线", "1-3 个交易日"), ("短线", "1-5 个交易日"), ("波段", "2-6 周"),
+               ("中线", "1-3 个月"), ("长线", "6 个月以上"))
 
-PICK_MODULES = (("短线", "1-5 个交易日"), ("波段", "2-6 周"),
-                ("中线", "1-3 个月"), ("长线", "6 个月以上"))
+PICK_STYLE_CYCLE = dict(PICK_STYLES)
 
-
-PICK_MODULE_CYCLE = dict(PICK_MODULES)
-
+PICK_STYLE_SET = {name for name, _c in PICK_STYLES}
 
 PICK_BOARD_TYPES = ("行业", "概念")
-
 
 PICK_L1_INDUSTRIES = (
     "农林牧渔", "基础化工", "钢铁", "有色金属", "电子", "汽车", "家用电器", "食品饮料",
@@ -24,281 +30,52 @@ PICK_L1_INDUSTRIES = (
     "通信", "银行", "非银金融", "美容护理", "石油石化", "煤炭", "环保", "机械设备",
 )
 
-
-PICK_CONCEPT_THEMES = (
-    ("指数与成分", ("上证", "深证", "沪深300", "中证", "创业板", "科创", "MSCI", "富时", "标普",
-                    "央视50", "HS300", "深成", "创业成份", "宁组合", "茅指数", "成份", "成分",
-                    "股通", "GDR", "转债标的", "做市", "北交所", "证金", "社保", "养老金", "QFII",
-                    "基金重仓", "机构重仓", "重仓")),
-    ("打板与热度", ("涨停", "跌停", "连板", "首板", "二板", "打板", "炸板", "多板", "触板", "人气",
-                    "飙升", "新高", "换手", "振幅", "龙虎榜", "游资", "融资融券", "热股", "活跃",
-                    "急涨", "放量", "量能", "庄股", "抢筹", "强势股")),
-    ("风格与因子", ("风格", "价值", "成长", "大盘", "中盘", "小盘", "微盘", "红利", "绩优", "超跌",
-                    "破发", "破增发", "破净", "市净率", "低价", "高价", "百元", "权重", "蓝筹",
-                    "题材股", "趋势股", "龙头", "精选", "周期股", "微利", "调研", "举牌", "股权",
-                    "重组", "并购", "增持", "回购", "解禁", "AH", "B股", "分拆", "反内卷", "反转股")),
-    ("事件与财务", ("中报", "年报", "一季报", "三季报", "季报", "业绩", "预增", "预减", "预亏",
-                    "扭亏", "首亏", "送转", "高送", "摘帽", "ST", "退市", "分红", "金股", "次新",
-                    "定增", "资产重组", "减值")),
-    ("AI与算力", ("人工智能", "算力", "大模型", "数据中心", "CPO", "AIGC", "智算", "液冷", "数字经济",
-                  "数据", "云计算", "边缘计算", "元宇宙", "ChatGPT", "DeepSeek", "Kimi", "鸿蒙",
-                  "信创", "网络安全", "区块链", "数字货币", "web3", "Web3", "英伟达", "华为", "腾讯",
-                  "阿里", "百度", "字节", "小米", "荣耀", "苹果", "微软", "海思", "软件", "信息化",
-                  "数字", "智能体", "ERP", "MLOps", "EDA", "东数西算", "政务", "大数据", "全息",
-                  "IDC", "国资云", "VPN", "EDR", "脑机")),
-    ("半导体与电子", ("芯片", "半导体", "集成电路", "存储", "光刻", "封测", "封装", "MLCC", "元件",
-                      "面板", "消费电子", "PCB", "铜缆", "被动", "电子", "氮化镓", "碳化硅", "传感器",
-                      "摄像头", "OLED", "LED", "显示", "虚拟现实", "增强现实", "VR", "MR", "AR", "3D",
-                      "屏", "内存", "基板", "碳纤维", "PEEK", "玻璃", "蓝宝石", "纳米银", "石墨烯",
-                      "无线耳机", "智能穿戴", "UWB", "智能电视", "超清视频", "空间计算", "混合现实")),
-    ("通信与卫星", ("5G", "6G", "通信", "卫星", "北斗", "光纤", "光通信", "光模块", "物联网", "WIFI",
-                    "WiFi", "超导", "量子", "星链", "雷达", "空间站", "毫米波", "智慧灯杆", "ETC")),
-    ("机器人与智能制造", ("机器人", "减速器", "工业母机", "智能制造", "机床", "3D打印", "工业4.0",
-                          "工业互联网", "专精特新", "独角兽", "新型工业化", "自动化", "仪器", "检测",
-                          "工程机械", "激光", "机器视觉", "电机", "PLC", "工业气体")),
-    ("医药与生物", ("医药", "医疗", "生物", "创新药", "CXO", "疫苗", "中药", "眼科", "牙科", "器械",
-                    "基因", "细胞", "血液", "CRO", "减肥", "合成生物", "医美", "诊断", "药", "防治",
-                    "健康", "养老", "生殖", "病毒", "流感", "肝素", "维生素", "单抗", "免疫",
-                    "阿兹海默", "青蒿素", "抗菌", "幽门", "医废", "SPD")),
-    ("军工与安全", ("军工", "军民融合", "大飞机", "航母", "无人机", "航天", "国防", "低空经济",
-                    "通用航空", "军贸", "民爆", "安防", "应急", "船舶", "海工", "海洋")),
-    ("新能源与电力", ("光伏", "储能", "锂电", "钠电", "氢", "风电", "风能", "核电", "电池", "充电桩",
-                      "高压快充", "无线充电", "特高压", "智能电网", "虚拟电厂", "电力", "电网", "绿电",
-                      "碳中和", "环保", "核聚变", "水利", "水电", "换电", "超超临界", "抽水蓄能",
-                      "地热", "可燃冰", "空气能", "热泵", "碳交易", "超级电容", "磁悬浮", "植物照明",
-                      "节能", "净水", "垃圾分类", "土壤修复", "尾气治理", "新能源")),
-    ("汽车与出行", ("汽车", "新能源车", "智能驾驶", "车联网", "压铸", "轮胎", "摩托车", "无人驾驶",
-                    "物流", "航运", "港口", "铁路", "航空运输", "机场", "高速", "快递", "冷链",
-                    "特斯拉", "轮毂", "胎压", "交运", "复合集流体")),
-    ("消费与传媒", ("白酒", "食品", "消费", "零售", "免税", "旅游", "影视", "游戏", "传媒", "短剧",
-                    "电商", "直播", "网红", "预制菜", "餐饮", "酒店", "家电", "服装", "纺织", "IP",
-                    "宠物", "教育", "体育", "彩票", "珠宝", "冰雪", "谷子", "味蕾", "小红书", "抖音",
-                    "快手", "微信", "品牌", "啤酒", "饮料", "乳业", "养殖", "农业", "猪", "鸡", "水产",
-                    "调味", "酿酒", "化妆品", "婴童", "盲盒", "户外", "露营", "拼多多", "社区团购",
-                    "地摊", "共享", "人造肉", "代糖", "退税", "内贸", "供销社", "粮食", "土地流转",
-                    "租售", "家居", "首发经济", "C2M", "托育", "工业大麻")),
-    ("周期与资源", ("稀土", "有色", "煤炭", "石油", "化工", "钢铁", "水泥", "建材", "磷", "氟", "钛",
-                    "小金属", "黄金", "白银", "铜", "铝", "天然气", "页岩", "煤化工", "涤纶", "粘胶",
-                    "农药", "化肥", "种业", "林业", "渔业", "矿业", "锂矿", "钠", "镁", "硅", "橡胶",
-                    "造纸", "包装", "管道", "上游", "资源", "冶金", "环氧", "草甘膦", "PVDF", "降解",
-                    "培育钻石", "油气", "冷能", "水运", "氦气", "碳基材料", "新材料")),
-    ("金融与地产", ("券商", "证券", "银行", "保险", "金融", "地产", "房地产", "参股", "期货", "信托",
-                    "租房", "物业", "建筑", "装修", "基建", "工程", "PPP", "AMC", "房屋", "REITs",
-                    "创投", "蚂蚁", "支付", "跨境", "地下管网", "统一大市场")),
-    ("政策与区域", ("国企改革", "央企", "一带一路", "自贸", "长三角", "长江三角", "雄安", "西部",
-                    "乡村振兴", "新型城镇化", "市值管理", "混改", "海南", "新疆", "成渝", "粤港澳",
-                    "京津冀", "东北", "中特估", "中字头", "职业教育", "财税", "改革", "减税", "就业",
-                    "生育", "城市", "区域", "保税", "口岸", "特区", "滨海", "中俄", "贬值", "知识产权")),
-)
-
-
-PICK_THEME_OTHER = "其他"
-
-
-PICK_PER_BOARD = 5
-
-
-PICK_MAX_CANDIDATES = 400
-
-
-PICK_MAX_CONCEPTS = 120
-
-
+PICK_POOL_SIZE = 400          # 候选池上限（按成交额降序）
+PICK_MODEL_TOP = 150          # 送模型的数量
+PICK_PAGE_TOP = 30            # 总榜长度（模型推荐榜）
+PICK_MAX_CHARS = 40000        # 事实包字符预算
+PICK_MIN_PRICE = 2.0          # 排除低价股阈值（元）
+PICK_MIN_AMOUNT = 5e7         # 排除低成交阈值（元）
 PICK_CACHE_DIR = os.path.join(DATA_DIR, "cache")
-
-
-PICK_MEM_TTL = 1800
-
-
-PICK_CACHE_TTL = 6 * 3600
-
 
 PICK_BOARD_FIELDS = ("f2,f3,f5,f6,f7,f8,f12,f14,f20,f21,f24,f25,f62,f104,f105,"
                      "f109,f110,f128,f136,f140,f160,f184")
 
-
-PICK_STOCK_FIELDS = ("f2,f3,f5,f6,f7,f8,f9,f10,f12,f14,f20,f21,f23,f24,f25,f62,"
-                     "f100,f109,f110,f115,f160,f184")
-
-
-PICK_MAX_CHARS = 40000
-
-
-PICK_MODEL_TOP = 12
-
-
-PICK_PAGE_TOP = 30        # 榜单总长度：四个模块合并去重后只留 30 只（不是每模块 30 只）
-
-
-PICK_MODULE_MIN = 3       # 每个模块的保底候选数，保证模型能给每个模块首推
-
-
-PICK_MIN_PRICE = 2.0
-
-
-PICK_MIN_AMOUNT = 5e7
-
-
-PICK_CAND_SCAN = 3
-
-
 PICK_SYSTEM = ("你是 A 股选股助手，只依据给定的事实数据做评估与筛选，不编造数值，"
-               "不作出具体买卖指令，结论不构成投资建议。")
+               "不给出具体买卖价位，结论不构成投资建议。")
 
-
-PICK_PROMPT = """下面是本地程序采集的中性行情数据（只有数值与口径，没有买卖建议）。
+PICK_PROMPT = """下面是本地程序采集的全市场中性行情与财务数据（只有数值与口径，没有买卖建议）。
 请只输出一个合法 JSON 对象：不要解释文字、不要 markdown 代码围栏、不要注释、不要尾随逗号。
 
 JSON 结构：
 {
-  "总评": {"一句话": "40-80 字，点明主要机会与风险",
-           "多空倾向": "偏多|偏空|中性", "最强模块": "短线|波段|中线|长线",
-           "最强板块": "板块名", "操作节奏": "…"},
-  "板块评估": [{"类型": "行业|概念", "名称": "…", "评级": "强|偏强|中性|弱",
-              "驱动": "…", "代表股": ["代码 名称"], "风险": "…"}],
-  "模块": [{"模块": "短线|波段|中线|长线", "评分": 0-100 的整数, "逻辑": "…",
-           "介入节奏": "…", "失效条件": "…",
-           "首推": [{"代码": "6 位代码", "名称": "…", "所属板块": "…",
-                    "评级": "关注|观察|回避", "理由": "…",
-                    "关注买点": {"价位": "数字或区间", "依据": "…"},
-                    "止损": {"价位": "数字", "依据": "…"},
-                    "目标位": [{"价位": "数字", "依据": "…"}],
-                    "风险": "…", "失效条件": "…"}]}],
-  "降级与不确定性": ["…"],
+  "市场风格": {"一句话": "80-150 字，点明当前市场主要机会与风险",
+              "多空倾向": "偏多|偏空|中性",
+              "最强打法": "超短线|短线|波段|中线|长线",
+              "操作节奏": "…"},
+  "推荐榜": [{"代码": "6 位代码", "名称": "…", "打法": "超短线|短线|波段|中线|长线",
+             "评分": 0-100 的整数, "评级": "关注|观察|回避",
+             "理由": "60 字以内，必须引用事实包里的数值",
+             "所属板块": "…"}],
+  "风险与不确定性": ["…"],
   "免责声明": "…"
 }
 
 要求：
-1) 只使用事实包里出现的代码与数值；事实包没有的（财务、分红、ROE 等）一律写进「降级与不确定性」，不要编造；
-2) 板块池是用户**筛选出来**的（只有行业细分与概念，没有指数），不是全市场扫描：请对事实包里出现的
-   每个板块都给一条「板块评估」，不要引入事实包之外的板块；「模块」覆盖事实包里出现的每个模块；
-3) 每个模块「首推」1-3 只，必须来自该模块的候选表；价位依据写清均线／前高前低／整数关口等，不得虚构数值；
-4) 每个模块必须给「失效条件」；本结论不构成投资建议。
+1) 只能从事实包「候选表」里出现的代码中挑选，一律写 6 位代码；事实包没有的一律不要编造；
+2) 「推荐榜」按评分从高到低给出 30 只（候选不足 30 只就全部给出），跨行业、跨打法统一排名；
+   评分要有区分度（不要大量同分，尽量用 1 分粒度拉开）；
+3) 每只必须从「超短线 / 短线 / 波段 / 中线 / 长线」里选**一个**最合适的打法，写进「打法」；
+4) **不要给任何买卖价位**（不给买点、止损、目标位），价格由使用者自行研判；
+5) 「理由」只写事实包里的数值支撑（如主力净流入、均线位置、营收增速），写清为什么适合这个打法；
+6) 把缺数据、结论可能不成立的地方写进「风险与不确定性」；本结论不构成投资建议。
 """
 
 
-def _pick_round(v, nd=3):
-    return None if v is None else round(v, nd)
-
-
-def pick_pct(values, v):
-    """池内分位（0-1，越大越高）。样本不足或缺失返回 None。"""
-    if v is None:
-        return None
-    xs = [x for x in values if x is not None]
-    if len(xs) < 2:
-        return None
-    below = sum(1 for x in xs if x < v)
-    same = sum(1 for x in xs if x == v)
-    return (below + 0.5 * same) / float(len(xs))
-
-
-def pick_wsum(pairs):
-    """加权平均；缺项按可用权重归一，全缺返回 None（缺失不当成 0）。"""
-    tot, w = 0.0, 0.0
-    for v, weight in pairs:
-        if v is None:
-            continue
-        tot += v * weight
-        w += weight
-    return None if w <= 0 else tot / w
-
-
-def pick_grade(score):
-    if score is None:
-        return "缺数据"
-    if score >= 75:
-        return "强"
-    if score >= 60:
-        return "偏强"
-    if score >= 45:
-        return "中性"
-    return "弱"
-
-
-PICK_MODULE_WEIGHTS = {
-    "短线": (("动量", 40), ("资金", 35), ("弹性", 15), ("板块", 10)),
-    "波段": (("波段动量", 35), ("资金", 20), ("换手适中", 20), ("板块", 25)),
-    "中线": (("60日动量", 25), ("资金占比", 15), ("估值", 30), ("市值流动性", 15), ("板块", 15)),
-    "长线": (("估值", 40), ("年初至今", 10), ("市值", 20), ("60日趋势", 15), ("板块", 15)),
-}
-
-
-def pick_score_boards(boards):
-    """同一类板块池内打分（0-100），就地写 机械分 / 评级 / 维度。"""
-    def col(k):
-        return [pan.num(b.get(k)) for b in boards]
-    c3, c109, c160, c110 = col("f3"), col("f109"), col("f160"), col("f110")
-    c184, c62, c8, c6 = col("f184"), col("f62"), col("f8"), col("f6")
-    for b in boards:
-        mom = pick_wsum([(pick_pct(c3, pan.num(b.get("f3"))), 0.4),
-                         (pick_pct(c109, pan.num(b.get("f109"))), 0.3),
-                         (pick_pct(c160, pan.num(b.get("f160"))), 0.2),
-                         (pick_pct(c110, pan.num(b.get("f110"))), 0.1)])
-        fund = pick_wsum([(pick_pct(c184, pan.num(b.get("f184"))), 0.6),
-                          (pick_pct(c62, pan.num(b.get("f62"))), 0.4)])
-        up, dn = pan.num(b.get("f104")), pan.num(b.get("f105"))
-        breadth = None if (up is None or dn is None or (up + dn) <= 0) else up / (up + dn)
-        vol = pick_wsum([(pick_pct(c8, pan.num(b.get("f8"))), 0.5),
-                         (pick_pct(c6, pan.num(b.get("f6"))), 0.5)])
-        score = pick_wsum([(mom, 0.35), (fund, 0.30), (breadth, 0.20), (vol, 0.15)])
-        b["维度"] = {"动量": _pick_round(mom), "资金": _pick_round(fund),
-                     "广度": _pick_round(breadth), "量能": _pick_round(vol)}
-        b["机械分"] = None if score is None else round(100.0 * score, 1)
-        b["评级"] = pick_grade(b["机械分"])
-    return boards
-
-
-def pick_board_view(b):
-    """板块行 → 存档/页面用的扁平结构。"""
-    n = pan.num
-    up, dn = n(b.get("f104")), n(b.get("f105"))
-    return {
-        "代码": str(b.get("f12") or ""), "名称": str(b.get("f14") or ""),
-        "类型": b.get("类型"),
-        "涨跌幅_pct": n(b.get("f3")), "5日_pct": n(b.get("f109")),
-        "10日_pct": n(b.get("f160")), "20日_pct": n(b.get("f110")),
-        "60日_pct": n(b.get("f24")), "年初至今_pct": n(b.get("f25")),
-        "成交额_亿": None if n(b.get("f6")) is None else round(n(b.get("f6")) / 1e8, 2),
-        "换手率_pct": n(b.get("f8")),
-        "主力净流入_亿": None if n(b.get("f62")) is None else round(n(b.get("f62")) / 1e8, 3),
-        "主力净占比_pct": n(b.get("f184")),
-        "上涨家数": None if up is None else int(up),
-        "下跌家数": None if dn is None else int(dn),
-        "领涨股": b.get("f128"), "领涨股代码": b.get("f140"), "领涨股涨跌幅_pct": n(b.get("f136")),
-        "机械分": b.get("机械分"), "评级": b.get("评级"), "维度": b.get("维度"),
-        "热度": b.get("热度"),
-        "行情口径": b.get("行情口径"), "一级行业": b.get("一级行业"), "细分": b.get("细分"),
-        "主题": b.get("主题"), "入池": b.get("入池"),
-    }
-
-
-def pick_stock_view(r, module):
-    """候选股行 → 存档/页面用的扁平结构（行情 + 打分）。"""
-    n = pan.num
-    e8 = lambda v: None if n(v) is None else round(n(v) / 1e8, 4)
-    return {
-        "代码": r.get("代码"), "名称": r.get("名称"), "来源板块": r.get("来源板块"),
-        "板块类型": r.get("板块类型"), "板块分": r.get("板块分"),
-        "模块": module,
-        "现价": n(r.get("f2")), "涨跌幅_pct": n(r.get("f3")),
-        "5日_pct": n(r.get("f109")), "10日_pct": n(r.get("f160")),
-        "20日_pct": n(r.get("f110")), "60日_pct": n(r.get("f24")),
-        "年初至今_pct": n(r.get("f25")), "换手率_pct": n(r.get("f8")),
-        "量比": n(r.get("f10")), "振幅_pct": n(r.get("f7")),
-        "成交额_亿": e8(r.get("f6")), "主力净流入_亿": e8(r.get("f62")),
-        "主力净占比_pct": n(r.get("f184")),
-        "PE": pick_pe(r), "PB": n(r.get("f23")),
-        "总市值_亿": e8(r.get("f20")), "流通市值_亿": e8(r.get("f21")),
-        "所属行业": r.get("f100"),
-        "机械分": r.get("机械分"), "评级": r.get("评级"), "维度": r.get("维度"),
-    }
-
-
 def pick_pe(r):
-    """PE 取 f115（TTM）优先，缺失回退 f9（动态）；负值视为缺失。"""
-    for k in ("f115", "f9"):
-        v = pan.num(r.get(k))
+    """PE 取值：f115（TTM）优先，缺失回退 f9（动态），负值视为缺失。"""
+    for key in ("f115", "f9"):
+        v = pan.num(r.get(key))
         if v is not None and v > 0:
             return v
     return None
@@ -346,128 +123,13 @@ def pick_filter(rows, exclude):
     return kept, stats
 
 
-def pick_score_stocks(rows, module):
-    """候选池内按模块权重打分（0-100），就地写 机械分 / 评级 / 维度。"""
-    def col(k):
-        return [pan.num(r.get(k)) for r in rows]
-    c3, c109, c160, c110, c24 = col("f3"), col("f109"), col("f160"), col("f110"), col("f24")
-    c25, c184, c62, c8, c10 = col("f25"), col("f184"), col("f62"), col("f8"), col("f10")
-    c7, c6, c21, c20 = col("f7"), col("f6"), col("f21"), col("f20")
-    pe_col = [pick_pe(r) for r in rows]
-    pb_col = [pan.num(r.get("f23")) for r in rows]
-    for r in rows:
-        g = lambda k: pan.num(r.get(k))
-        p = lambda col_, v: pick_pct(col_, v)
-        board = None if r.get("板块分") is None else r["板块分"] / 100.0
-        mom_short = pick_wsum([(p(c3, g("f3")), 0.35), (p(c109, g("f109")), 0.35),
-                               (p(c10, g("f10")), 0.30)])
-        fund = pick_wsum([(p(c184, g("f184")), 0.5), (p(c62, g("f62")), 0.5)])
-        elastic = pick_wsum([(p(c7, g("f7")), 0.5), (p(c8, g("f8")), 0.5)])
-        mom_swing = pick_wsum([(p(c109, g("f109")), 0.4), (p(c160, g("f160")), 0.35),
-                               (p(c110, g("f110")), 0.25)])
-        p8 = p(c8, g("f8"))
-        turn_mid = None if p8 is None else max(0.0, 1.0 - abs(p8 - 0.5) * 2.0)
-        pe_v, pb_v = pick_pe(r), g("f23")
-        pe_pct, pb_pct = p(pe_col, pe_v), p(pb_col, pb_v)
-        val = pick_wsum([(None if pe_pct is None else 1.0 - pe_pct, 0.6),
-                         (None if pb_pct is None else 1.0 - pb_pct, 0.4)])
-        size_liq = pick_wsum([(p(c6, g("f6")), 0.5), (p(c21, g("f21")), 0.5)])
-        dims = {
-            "短线": {"动量": mom_short, "资金": fund, "弹性": elastic, "板块": board},
-            "波段": {"波段动量": mom_swing, "资金": p(c62, g("f62")),
-                     "换手适中": turn_mid, "板块": board},
-            "中线": {"60日动量": p(c24, g("f24")), "资金占比": p(c184, g("f184")),
-                     "估值": val, "市值流动性": size_liq, "板块": board},
-            "长线": {"估值": val, "年初至今": p(c25, g("f25")), "市值": p(c20, g("f20")),
-                     # 60 日趋势：跌得少/涨得多的标视为回撤更可控（方向与动量一致）
-                     "60日趋势": p(c24, g("f24")), "板块": board},
-        }[module]
-        weights = PICK_MODULE_WEIGHTS[module]
-        score = pick_wsum([(dims.get(k), w / 100.0) for k, w in weights])
-        r["维度"] = {k: _pick_round(v) for k, v in dims.items()}
-        r["机械分"] = None if score is None else round(100.0 * score, 1)
-        r["评级"] = pick_grade(r["机械分"])
-    return rows
-
-
-def pick_concept_theme(name):
-    """概念名 → 主题（有序关键词表，命中即返回；未命中落「其他」）。"""
-    nm = str(name or "")
-    for theme, kws in PICK_CONCEPT_THEMES:
-        for kw in kws:
-            if kw == "AI":
-                if "AI" in nm.upper():
-                    return theme
-                continue
-            if kw in nm:
-                return theme
-    return PICK_THEME_OTHER
-
-
-def pick_module_picks(scored, modules, total=PICK_PAGE_TOP, floor=PICK_MODULE_MIN):
-    """四模块合并只留 total 只，**每只股票只归一个模块**。
-
-    规则：每个模块先按它自己的排名保底 floor 只（不抢别家已占的），
-    剩下的名额按全局最高机械分补足，并归到该股分数最高的那个模块。
-    返回 {代码: 模块}；scored = {模块: [已按该模块机械分降序的候选行]}。
-    """
-    assign = {}
-    for m in modules:                       # 保底：每模块从自己的排名里拿 floor 只
-        took = 0
-        for row in scored.get(m) or []:
-            if took >= floor or len(assign) >= total:
-                break
-            code = row.get("代码")
-            if not code or code in assign:
-                continue
-            assign[code] = m
-            took += 1
-    best = {}
-    for m in modules:                       # 全局最高机械分（记录它出自哪个模块）
-        for row in scored.get(m) or []:
-            code = row.get("代码")
-            if not code:
-                continue
-            score = row.get("机械分")
-            score = -1.0 if score is None else float(score)
-            if code not in best or score > best[code][0]:
-                best[code] = (score, m)
-    for code, (_score, m) in sorted(best.items(), key=lambda kv: (-kv[1][0], kv[0])):
-        if len(assign) >= total:
-            break
-        if code not in assign:
-            assign[code] = m
-    return assign
-
-
 def pick_param(body):
-    """整理荐股筛选参数（带默认与上限保护）。"""
+    """整理荐股参数（带默认与上限保护）。
+
+    旧版参数（module / modules / industry / concepts / per_board）已废弃：传了也忽略，
+    这样老的调用方与快捷键不会直接报错。
+    """
     body = body or {}
-    # 模块支持多选：module / modules 合并后按固定顺序去重（同时传多个也只留一份）
-    asked = [body.get("module")] + list(body.get("modules") or [])
-    wanted = {str(m).strip() for m in asked if str(m or "").strip() in PICK_MODULE_CYCLE}
-    modules = [name for name, _ in PICK_MODULES if name in wanted]
-    if not modules:
-        modules = [PICK_MODULES[0][0]]
-    industry, seen_i = [], set()
-    for raw in (body.get("industry") or []):
-        if not isinstance(raw, dict):
-            continue
-        code = str(raw.get("code") or "").strip().upper()
-        if not re.match(r"^BK\d{3,5}$", code) or code in seen_i:
-            continue
-        seen_i.add(code)
-        subs = [str(x).strip() for x in (raw.get("subs") or []) if str(x).strip()]
-        industry.append({"code": code,
-                         "name": str(raw.get("name") or "").strip(),
-                         "subs": subs[:40]})
-    concepts, seen_c = [], set()
-    for raw in (body.get("concepts") or []):
-        code = str(raw or "").strip().upper()
-        if re.match(r"^BK\d{3,5}$", code) and code not in seen_c:
-            seen_c.add(code)
-            concepts.append(code)
-    concepts = concepts[:PICK_MAX_CONCEPTS]
 
     def clamp(v, lo, hi, dflt):
         try:
@@ -485,9 +147,8 @@ def pick_param(body):
         "skip_688_bj": bool(ex.get("skip_688_bj", False)),
     }
     return {
-        "modules": modules, "industry": industry, "concepts": concepts,
-        "per_board": clamp(body.get("per_board"), 1, 20, PICK_PER_BOARD),
-        "max_candidates": clamp(body.get("max_candidates"), 20, 2000, PICK_MAX_CANDIDATES),
+        "pool_size": clamp(body.get("pool_size"), 40, 2000, PICK_POOL_SIZE),
+        "model_top": clamp(body.get("model_top"), 20, 400, PICK_MODEL_TOP),
         "max_chars": clamp(body.get("max_chars"), 4000, 200000, PICK_MAX_CHARS),
         "refresh": bool(body.get("refresh")),
         "profile": (body.get("profile") or "").strip() or None,
@@ -496,6 +157,17 @@ def pick_param(body):
         "api_key": (body.get("api_key") or "").strip() or None,
         "exclude": exclude,
     }
+
+
+def pick_style_of(value, fallback="短线"):
+    """模型给的打法 → 收敛到五档之一（不在表里就回退默认）。"""
+    text = str(value or "").strip()
+    if text in PICK_STYLE_SET:
+        return text
+    for name, _cycle in PICK_STYLES:
+        if name and name in text:
+            return name
+    return fallback
 
 
 def pick_table(rows, cols, headers):
@@ -513,191 +185,146 @@ def pick_table(rows, cols, headers):
     return "\n".join(out)
 
 
-PICK_BOARD_COLS = ["类型", "名称", "一级行业", "主题", "涨跌幅_pct", "5日_pct", "10日_pct",
-                   "20日_pct", "60日_pct", "主力净流入_亿", "主力净占比_pct", "上涨家数",
-                   "下跌家数", "成交额_亿", "机械分", "评级", "行情口径", "领涨股"]
+# 事实包候选表：只给原始数据（不含机械分），列宽控制在 20 列以内
+PICK_CAND_COLS = ["代码", "名称", "行业", "现价", "涨跌幅_pct", "成交额_亿", "换手率_pct",
+                  "量比", "20日_pct", "60日_pct", "年初至今_pct", "PE_TTM", "PB",
+                  "总市值_亿", "自由流通市值_亿", "主力净流入_万", "主力净占比_pct",
+                  "ROE_pct", "毛利率_pct", "净利率_pct", "营收同比_pct", "净利同比_pct",
+                  "资产负债率_pct"]
+
+PICK_CAND_HEADS = ["代码", "名称", "行业", "现价", "涨跌%", "成交额亿", "换手%", "量比",
+                   "20日%", "60日%", "年初%", "PE", "PB", "总市值亿", "自由流通亿",
+                   "主力净流入万", "主力净占比%", "ROE%", "毛利率%", "净利率%",
+                   "营收同比%", "净利同比%", "负债率%"]
+
+PICK_TECH_COLS = ["代码", "名称", "MA20距离_pct", "MA60距离_pct", "MA120距离_pct",
+                  "MA250距离_pct", "量能比_20_60", "量价比_5", "MACD", "RSI14",
+                  "超额20_pct", "换手10日_pct", "主力10日_万", "龙虎榜", "质押比例_pct",
+                  "北向变动_pp", "筹码集中度", "十大流通占比_pct"]
+
+PICK_TECH_HEADS = ["代码", "名称", "距MA20%", "距MA60%", "距MA120%", "距MA250%",
+                   "量能比", "量价比", "MACD", "RSI14", "超额20%", "10日换手%",
+                   "10日主力万", "龙虎榜", "质押%", "北向变动pp", "筹码集中度", "十大流通%"]
 
 
-PICK_BOARD_HEADS = ["类型", "名称", "一级行业", "主题", "涨跌%", "5日%", "10日%", "20日%",
-                    "60日%", "主力净流入(亿)", "主力净占比%", "上涨", "下跌", "成交额(亿)",
-                    "机械分", "评级", "行情口径", "领涨股"]
-
-
-PICK_STOCK_COLS = ["代码", "名称", "来源板块", "板块分", "现价", "涨跌幅_pct", "5日_pct",
-                   "10日_pct", "20日_pct", "60日_pct", "换手率_pct", "量比", "振幅_pct",
-                   "成交额_亿", "主力净流入_亿", "主力净占比_pct", "PE", "PB",
-                   "总市值_亿", "机械分", "评级"]
-
-
-PICK_STOCK_HEADS = ["代码", "名称", "来源板块", "板块分", "现价", "涨跌%", "5日%", "10日%",
-                    "20日%", "60日%", "换手%", "量比", "振幅%", "成交额(亿)",
-                    "主力净流入(亿)", "主力净占比%", "PE", "PB", "总市值(亿)", "机械分", "评级"]
-
-
-def pick_merge_rows(cands):
-    """候选字典 → 合并候选榜：同一只股票只留机械分最高的那条，附「模块 / 模块列表」。"""
-    by, order = {}, []
-    for m, rows in (cands or {}).items():
-        for r in rows or []:
-            code = r.get("代码")
-            if not code:
-                continue
-            hit = by.get(code)
-            if hit is None:
-                merged = dict(r)
-                merged["模块"] = m
-                merged["模块列表"] = [m]
-                by[code] = merged
-                order.append(code)
-                continue
-            if m not in hit["模块列表"]:
-                hit["模块列表"].append(m)
-            old = hit.get("机械分")
-            new = r.get("机械分")
-            if (new if new is not None else -1.0) > (old if old is not None else -1.0):
-                mods = hit["模块列表"]
-                merged = dict(r)
-                merged["模块"] = m
-                merged["模块列表"] = mods
-                by[code] = merged
-    rows = [by[c] for c in order]
-    rows.sort(key=lambda x: (x.get("机械分") if x.get("机械分") is not None else -1.0), reverse=True)
-    return rows
-
-
-PICK_MERGE_COLS = ["模块", "模块列表"] + PICK_STOCK_COLS
-
-
-PICK_MERGE_HEADS = ["模块", "入选模块"] + PICK_STOCK_HEADS
 def _pick_factpack(payload, keep):
-    """按 keep（每模块候选数）渲染事实包文本。"""
-    p = payload.get("参数") or {}
-    L = ["# 荐股事实包（东财行情 + pan 快照，中立数值，不含买卖建议）",
-         "- 生成时间：%s ｜ 交易日参考：%s" % (payload.get("生成时间"), payload.get("交易日") or "—"),
-         "- 模块：%s ｜ 只覆盖行业细分与概念两类板块（没有指数）"
-         % "/".join(p.get("模块") or []),
-         "- 候选池 %d 只 ｜ 每板块候选 %d 只 ｜ 候选上限 %s ｜ 分位均在本次池内计算"
-         % (payload.get("候选池数量") or 0, p.get("每板块候选") or 0, p.get("候选上限") or "—")]
-    sel = p.get("筛选") or {}
-    ind = sel.get("行业") or []
-    con = sel.get("概念") or []
-    if ind:
-        L.append("- 用户筛选的行业：%s"
-                 % "；".join("%s（细分：%s）" % (x.get("名称"), x.get("细分"))
-                             for x in ind))
-    if con:
-        L.append("- 用户筛选的概念（%d 个）：%s"
-                 % (len(con), "、".join(str(x.get("名称")) for x in con[:40])))
-    L.append("- 板块池是用户筛选出来的，不是全市场扫描；行情口径为「东财板块」或「成分股聚合」。")
-    if payload.get("排除统计"):
-        L.append("- 已排除：" + "，".join("%s %d 只" % (k, v)
-                                        for k, v in payload["排除统计"].items()))
+    """渲染事实包文本（keep = 送模型的条数）。**不含机械分**，只给原始数据。"""
+    scan = payload.get("扫描") or {}
+    env = payload.get("市场环境") or {}
+    heat = payload.get("板块背景") or {}
+    cands = (payload.get("候选池") or [])[:keep]
+    tech = (payload.get("候选技术") or {})
+    L = ["# 荐股事实包（全市场扫描 + 东财行情/财务，中立数值，不含买卖建议）",
+         "- 生成时间：%s ｜ 交易日参考：%s"
+         % (payload.get("生成时间"), payload.get("交易日") or "—"),
+         "- 扫描口径：东财全 A %s 只 → 排除规则后候选池 %d 只 → 本事实包取前 %d 只"
+         % (scan.get("全市场总数") or "—", scan.get("候选池数量") or 0, keep),
+         "- 已排除：" + ("，".join("%s %d 只" % (k, v)
+                                  for k, v in (scan.get("排除统计") or {}).items()) or "无"),
+         "- 说明：候选池按成交额降序取前 %s 只；本地打分结果不提供给模型，"
+         "模型只依据下面的原始数据自行判断。" % (payload.get("扫描参数") or {}).get("候选池上限")]
+    L.append("\n## 0 市场环境（模块1 原始数据）")
+    L.append("- 10 年期国债收益率：%s%% ｜ 近5日日均全市场成交额：%s 亿 ｜ 近5日日均涨停家数：%s 家"
+             % (env.get("bond10y"), env.get("amount5"), env.get("limitup5")))
+    if heat.get("行业"):
+        L.append("- 行业涨跌幅前 10：%s"
+                 % "、".join("%s %s%%" % (x.get("名称"), x.get("涨跌幅_pct"))
+                             for x in heat["行业"].get("前10") or []))
+        L.append("- 行业涨跌幅后 10：%s"
+                 % "、".join("%s %s%%" % (x.get("名称"), x.get("涨跌幅_pct"))
+                             for x in heat["行业"].get("后10") or []))
+    if heat.get("概念"):
+        L.append("- 概念涨跌幅前 10：%s"
+                 % "、".join("%s %s%%" % (x.get("名称"), x.get("涨跌幅_pct"))
+                             for x in heat["概念"].get("前10") or []))
+    if payload.get("大盘"):
+        L.append("- 大盘快照：%s" % payload["大盘"])
+    L.append("\n## 1 候选表（原始行情与财务，共 %d 只）" % len(cands))
+    L.append(pick_table(cands, PICK_CAND_COLS, PICK_CAND_HEADS))
+    rows = []
+    for c in cands:
+        t = dict(tech.get(c.get("代码")) or {})
+        t["代码"], t["名称"] = c.get("代码"), c.get("名称")
+        rows.append(t)
+    L.append("\n## 2 候选技术面与资金（同一批标的，原始指标）")
+    L.append(pick_table(rows, PICK_TECH_COLS, PICK_TECH_HEADS))
     if payload.get("降级"):
-        L.append("- 降级项：" + "；".join(payload["降级"]))
-    L.append("- 说明：PE 为负或缺失记 —；次新股已在排除规则中处理；无财务/分红/ROE 数据。")
-    L.append("\n## 1 板块评估（机械打分 0-100）")
-    for label, rows in (payload.get("板块") or {}).items():
-        top = sorted(rows or [], key=lambda x: (x.get("机械分")
-                                                if x.get("机械分") is not None else -1),
-                     reverse=True)[:20]
-        L.append("\n### %s板块（共 %d 个，下列为机械分前 %d 个）"
-                 % (label, len(rows or []), len(top)))
-        L.append(pick_table(top, PICK_BOARD_COLS, PICK_BOARD_HEADS))
-    L.append("\n## 2 模块候选（按该模块机械分降序，每模块最多 %d 只）" % keep)
-    for m, rows in (payload.get("候选") or {}).items():
-        L.append("\n### 模块：%s（持有周期 %s）" % (m, PICK_MODULE_CYCLE.get(m, "")))
-        L.append(pick_table((rows or [])[:keep], PICK_STOCK_COLS, PICK_STOCK_HEADS))
+        L.append("\n## 3 数据依赖与降级")
+        L += ["- %s" % x for x in payload["降级"]]
+    L.append("\n## 4 口径说明")
+    L.append("- 现价/涨跌幅为采集时点快照；财务为最新披露报告期（见参数说明），非 TTM 的部分已注明；")
+    L.append("- 主力资金为东财口径（近10日合计，单位万元）；北向为季度快照环比（百分点）；")
+    L.append("- 筹码集中度：优先东财 F10 股东户数集中度，它不是数字时用「60 日价格区间"
+             "集中度」（公式与文件一致）；质押比例是股权质押口径；")
+    L.append("- 没有买卖价位、没有收益预测；模型输出 30 只推荐榜时只能引用上表数值。")
     return "\n".join(L)
 
 
 def pick_factpack(payload, cap):
-    """事实包；超出 cap 时逐步减少每模块候选数。"""
-    keep = PICK_MODEL_TOP
+    """事实包；超出 cap 时逐步减少候选条数（最少 20 条）。"""
+    keep = len((payload.get("候选池") or [])[:PICK_MODEL_TOP])
+    keep = max(20, keep)
     txt = _pick_factpack(payload, keep)
-    while len(txt) > cap and keep > 2:
-        keep -= 1
+    while len(txt) > cap and keep > 20:
+        keep = max(20, keep - 5)
         txt = _pick_factpack(payload, keep)
     return txt
 
 
 def pick_markdown(p):
     """人读版 Markdown（存档用）。"""
-    par = p.get("参数") or {}
-    sel = par.get("筛选") or {}
-    ind, con = sel.get("行业") or [], sel.get("概念") or []
-    L = ["# 荐股结果 · aiplan Web UI", "",
-         "- 生成时间：%s ｜ 模块：%s ｜ 板块类型：%s"
-         % (p.get("生成时间"), "/".join(par.get("模块") or []),
-            "/".join([t for t, v in (p.get("板块") or {}).items() if v]) or "—"),
-         "- 筛选：行业 %d 个（细分 %s）｜ 概念 %d 个"
-         % (len(ind), "、".join("（".join([x.get("名称") or "", str(x.get("细分"))]) + "）"
-                                for x in ind) or "—", len(con)),
-         "- 每板块候选 %s 只 ｜ 候选上限 %s ｜ 合并候选 %s 只（四模块合计）"
-         % (par.get("每板块候选"), par.get("候选上限"),
-            p.get("合并候选数") if p.get("合并候选数") is not None else "—"),
-         "- 候选池 %d 只 ｜ 交易日参考 %s ｜ 模型 %s ｜ 费用 %s"
-         % (p.get("候选池数量") or 0, p.get("交易日") or "—",
+    par = p.get("扫描参数") or {}
+    scan = p.get("扫描") or {}
+    env = p.get("市场环境") or {}
+    L = ["# 荐股结果（全大盘 · 模型为主） · aiplan Web UI", "",
+         "- 生成时间：%s ｜ 交易日参考：%s ｜ 模型：%s ｜ 费用：%s"
+         % (p.get("生成时间"), p.get("交易日") or "—",
             (p.get("配置") or {}).get("model") or "未点评",
             (p.get("成本") or {}).get("人民币_估算")
             if (p.get("成本") or {}).get("人民币_估算") is not None else "未配置单价"),
+         "- 扫描：全市场 %s 只 → 候选池 %d 只（成交额降序前 %s）→ 送模型 %s 只 → 推荐榜 %d 只"
+         % (scan.get("全市场总数") or "—", scan.get("候选池数量") or 0,
+            par.get("候选池上限"), par.get("送模型数量"), len(p.get("推荐榜") or [])),
+         "- 机械分口径：%s" % (p.get("机械口径") or {}).get("说明", "—"),
          "- 事实包 %d 字符 ｜ 用时见任务日志" % (p.get("factpack_chars") or 0), ""]
-    grade = p.get("总评") or {}
-    if grade:
-        L += ["## 总评", "",
-              "- 一句话：%s" % (grade.get("一句话") or "—"),
-              "- 多空倾向：%s ｜ 最强模块：%s ｜ 最强板块：%s"
-              % (grade.get("多空倾向") or "—", grade.get("最强模块") or "—",
-                 grade.get("最强板块") or "—"),
-              "- 操作节奏：%s" % (grade.get("操作节奏") or "—"), ""]
+    style = p.get("市场风格") or {}
+    if style:
+        L += ["## 市场风格", "",
+              "- 一句话：%s" % (style.get("一句话") or "—"),
+              "- 多空倾向：%s ｜ 最强打法：%s ｜ 操作节奏：%s"
+              % (style.get("多空倾向") or "—", style.get("最强打法") or "—",
+                 style.get("操作节奏") or "—"), ""]
     if (p.get("模型层") or {}).get("error"):
-        L += ["> **[WARN] 本次没有模型点评**：%s（下列为本地机械打分榜）"
+        L += ["> **[WARN] 本次没有模型评分**：%s（下列按机械分排序）"
               % (p.get("模型层") or {}).get("error"), ""]
-
-    mods = p.get("模块") or []
-    if mods:
-        L += ["## 模块评估", ""]
-        for m in mods:
-            L += ["### %s（评分 %s）" % (m.get("模块") or "—", m.get("评分") if m.get("评分") is not None else "—"),
-                  "", "- 逻辑：%s" % (m.get("逻辑") or "—"),
-                  "- 介入节奏：%s" % (m.get("介入节奏") or "—"),
-                  "- 失效条件：%s" % (m.get("失效条件") or "—"), ""]
-            for c in (m.get("首推") or []):
-                buy = c.get("关注买点") or {}
-                stop = c.get("止损") or {}
-                L.append("**%s %s**（%s，%s）" % (c.get("代码") or "—", c.get("名称") or "",
-                                              c.get("评级") or "—", c.get("所属板块") or "—"))
-                L.append("")
-                L.append("- 理由：%s" % (c.get("理由") or "—"))
-                L.append("- 关注买点：%s（%s）" % (buy.get("价位") or "—", buy.get("依据") or "—"))
-                L.append("- 止损：%s（%s）" % (stop.get("价位") or "—", stop.get("依据") or "—"))
-                for t in (c.get("目标位") or []):
-                    L.append("- 目标位：%s（%s）" % (t.get("价位") or "—", t.get("依据") or "—"))
-                L.append("- 风险：%s" % (c.get("风险") or "—"))
-                L.append("- 失效条件：%s" % (c.get("失效条件") or "—"))
-                L.append("")
-    evals = p.get("板块评估") or []
-    if evals:
-        L += ["## 模型板块评估", "",
-              pick_table([{"类型": e.get("类型"), "名称": e.get("名称"), "评级": e.get("评级"),
-                           "驱动": e.get("驱动"), "代表股": "、".join(e.get("代表股") or []),
-                           "风险": e.get("风险")} for e in evals],
-                         ["类型", "名称", "评级", "驱动", "代表股", "风险"],
-                         ["类型", "名称", "评级", "驱动", "代表股", "风险"]), ""]
-    L += ["## 机械层：板块打分", ""]
-    for label, rows in (p.get("板块") or {}).items():
-        top = sorted(rows or [], key=lambda x: (x.get("机械分")
-                                               if x.get("机械分") is not None else -1),
-                     reverse=True)
-        L += ["### %s板块（%d 个）" % (label, len(top)), "",
-              pick_table(top, PICK_BOARD_COLS, PICK_BOARD_HEADS), ""]
-    merged = pick_merge_rows(p.get("候选") or {})
-    L += ["## 机械层：候选榜（四模块合并去重，共 %d 只）" % len(merged), "",
-          pick_table(merged, PICK_MERGE_COLS, PICK_MERGE_HEADS), ""]
+    rows = p.get("推荐榜") or []
+    if rows:
+        L += ["## 推荐榜（模型评分降序）", "",
+              pick_table(rows, ["排名", "代码", "名称", "打法", "评分", "评级", "机械分",
+                                "现价", "涨跌幅_pct", "所属板块", "理由"],
+                         ["排名", "代码", "名称", "打法", "评分", "评级", "机械分",
+                          "现价", "涨跌%", "所属板块", "理由"]), ""]
+    veto = p.get("被否决") or []
+    if veto:
+        L += ["## 一票否决（直接被淘汰）", "",
+              pick_table(veto, ["阶段", "代码", "名称", "原因"], ["阶段", "代码", "名称", "原因"]), ""]
+    L += ["## 机械层（辅助参考，不参与排名）", ""]
+    L.append("- 机械分按《机器打分逻辑.txt》对全池打分；缺失项：%s"
+             % "、".join("%s（%d 分）" % (x["指标"], x["满分"])
+                         for x in (p.get("机械口径") or {}).get("缺失") or []) or "无")
+    L.append(pick_table((p.get("机械层") or [])[:40],
+                        ["代码", "名称", "机械分", "实得", "可得"],
+                        ["代码", "名称", "机械分", "实得", "可得"]))
+    L.append("")
+    L += ["## 市场环境", "",
+          "- 10 年国债 %s%% ｜ 近5日日均成交额 %s 亿 ｜ 近5日日均涨停 %s 家"
+          % (env.get("bond10y"), env.get("amount5"), env.get("limitup5")), ""]
     if p.get("降级"):
         L += ["## 数据依赖与降级", ""] + ["- %s" % x for x in p["降级"]] + [""]
-    if p.get("降级与不确定性"):
-        L += ["## 模型提示的不确定性", ""] + ["- %s" % x for x in p["降级与不确定性"]] + [""]
+    if p.get("风险与不确定性"):
+        L += ["## 模型提示的不确定性", ""] + ["- %s" % x for x in p["风险与不确定性"]] + [""]
     L += ["## 说明", "",
-          "- 机械分为本地打分（模块权重不同，分位在本次候选池内计算），不是收益预测。",
-          "- %s" % (p.get("免责声明") or "本结论由机械打分与模型点评生成，不构成投资建议。"), ""]
+          "- 推荐榜按模型评分排序，机械分只作辅助列；两者都不构成绩效承诺。",
+          "- 模型不给买卖价位：价位请自行研判（可以再去「报告」或「交易流」里做计划）。",
+          "- %s" % (p.get("免责声明") or "本结论由模型评分与机械分共同生成，不构成投资建议。"), ""]
     return "\n".join(L)

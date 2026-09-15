@@ -47,6 +47,7 @@ def summarize_payload(payload):
             "复核_输出": ((payload.get("复核") or {}).get("usage") or {}).get("输出"),
         },
         "profile": (payload.get("profile") or {}).get("名称"),
+        "交易日": payload.get("trade_date"),
         "生成时间": payload.get("generated_at"),
         "note": payload.get("note"),
     }
@@ -98,6 +99,14 @@ def list_reports():
                 item["摘要"] = summarize_payload(payload)
             except Exception:
                 item["摘要"] = None
+    session = None
+    try:
+        from .plancheck import session_of
+        session = session_of()
+    except Exception:            # noqa: BLE001  日历读不到就只按天数判定
+        session = None
+    for item in out:
+        item.update(report_staleness(item, session))
     return out
 
 
@@ -126,6 +135,68 @@ def latest_report(phase=None):
         return path
     lpat = (r"^latest_%s\.json$" % phase) if phase else r"^latest_[a-z]+\.json$"
     return newest_file(ai_files(lpat))
+
+
+STALE_DAYS = 3               # 报告超过几天算「过时」（页面提示重新生成）
+
+
+def report_staleness(item, session=None):
+    """报告是否过时：生成超过 STALE_DAYS 天，或交易日已经走到报告之后。"""
+    mtime = item.get("mtime")
+    days = None
+    if mtime:
+        days = int(max(0, (time.time() - mtime) // 86400))
+    trade_day = str(((item.get("摘要") or {}).get("交易日") or "")).strip()
+    today = str((session or {}).get("现在") or "")[:10]
+    trading = bool((session or {}).get("是否交易日"))
+    stale, why = False, ""
+    if trade_day and today and trading and trade_day < today:
+        stale, why = True, "报告交易日 %s 早于今天（今天开市）" % trade_day
+    if days is not None and days >= STALE_DAYS:
+        stale = True
+        why = why or ("报告生成于 %d 天前" % days)
+    return {"过期": stale, "过期说明": why, "天数": days}
+
+
+PRUNE_INTERVAL = 60.0        # 同进程最多 60 秒扫一次盘
+
+_PRUNE_TS = [0.0]
+
+
+def prune_reports(keep_per_code=1, force=False, log=None):
+    """每个标的只保留最新一份报告，更早的（json/md/prompt/factpack）移入回收站。
+
+    属于维护动作：同进程 60 秒最多扫一次；只移动不删除，回收站 7 天后才真删，
+    需要时可以从回收站搬回原位。返回 {检查, 标的, 移入, 明细}。
+    """
+    now = time.time()
+    if not force and (now - _PRUNE_TS[0]) < PRUNE_INTERVAL:
+        return {"跳过": True, "原因": "同进程 %d 秒内已清理过" % int(PRUNE_INTERVAL)}
+    _PRUNE_TS[0] = now
+    groups = {}
+    for path in ai_files(r"^\d{6}_[a-z]+\.json$"):
+        try:
+            mtime = os.path.getmtime(path)
+        except OSError:
+            continue
+        doc = aiplan.read_json(path) or {}
+        code = aiplan.code6(((doc.get("标的") or {}).get("代码")) or "")
+        key = code or ("__" + os.path.basename(path))
+        groups.setdefault(key, []).append((mtime, path))
+    moved, detail = [], []
+    for key, rows in sorted(groups.items()):
+        rows.sort(reverse=True)
+        for _mtime, path in rows[keep_per_code:]:
+            res, err = delete_report(path)
+            if res:
+                moved.extend(res.get("移入") or [])
+                detail.append({"标的": key, "报告": rel(path)})
+                if log:
+                    log("[OK] 旧报告移入回收站：%s（每个标的只留最新一份）" % rel(path))
+            elif log:
+                log("[WARN] 旧报告清理失败：%s（%s）" % (rel(path), err))
+    return {"检查": sum(len(v) for v in groups.values()), "标的": len(groups),
+            "移入": moved, "明细": detail}
 
 
 def delete_report(path):

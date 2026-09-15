@@ -13,6 +13,7 @@ import { $, $$, esc, toast } from "../core/util.js";
 import { closeModal, confirmModal, openModal } from "../ui/modal.js";
 import { closedLine, flowCardsHtml, flowDetailHtml, flowFormHtml, paramsFormHtml,
          targetFormHtml } from "../ui/flowcards.js";
+import { bindFlowChart, drawFlowMinutes } from "../ui/flowchart.js";
 import { trackDetailHtml, trackListHtml } from "../ui/trackcards.js";
 
 export const Flow = {list: null, detail: null, fid: null, settings: null, day: "",
@@ -325,8 +326,38 @@ export async function openFlowDetail(fid, refresh, code) {
     $("#flow-detail").innerHTML = flowDetailHtml(d);
     $("#flow-detail-head").textContent = fid + " · " + (d["标的"] || []).length +
       " 只标的 ｜ 当前 " + ((curTarget() || {})["名称"] || "—");
+    renderFlowChart(fid, Flow.code, false);
   } catch (e) {
     $("#flow-detail").innerHTML = '<div class="fail">读取详情失败：' + esc(e.message) + "</div>";
+  }
+}
+
+/* 分时图：详情卡与行内「分时」按钮共用这一条渲染路径（一个标的一次请求）。 */
+export async function renderFlowChart(fid, code, refresh) {
+  const box = $("#flow-detail");
+  if (!box || !code) return;
+  const canvas = box.querySelector('[data-chart-code="' + code + '"]');
+  const note = box.querySelector('[data-chart-note="' + code + '"]');
+  if (!canvas) return;
+  if (note) note.textContent = "正在取分时 …";
+  try {
+    const d = await api("/api/flow/minutes?id=" + encodeURIComponent(fid) +
+      "&code=" + encodeURIComponent(code) + (refresh ? "&refresh=1" : ""));
+    /* 买卖点只画在分时对应那一天：优先当天成交；当天没有就用最近一天的成交（非交易日也看得见） */
+    const all = d["成交"] || [];
+    const days = Array.from(new Set(all.map(f => String(f["日期"] || "")))).sort();
+    const day = all.some(f => String(f["日期"] || "") === String(d["分时日期"] || ""))
+      ? String(d["分时日期"] || "") : (days[days.length - 1] || "");
+    const fills = all.filter(f => String(f["日期"] || "") === day);
+    drawFlowMinutes(canvas, d);
+    bindFlowChart(canvas);
+    if (note) {
+      const bits = [d["口径"] || "", "当日成交 " + fills.length + " 笔"];
+      if ((d["提示"] || []).length) bits.push(d["提示"].join("；"));
+      note.textContent = bits.filter(Boolean).join(" ｜ ");
+    }
+  } catch (e) {
+    if (note) note.textContent = "分时取数失败：" + e.message;
   }
 }
 
@@ -672,6 +703,15 @@ function onCardAction(e, root) {
   const fid = (cardEl && cardEl.dataset.fid) || Flow.fid;
   const code = t.dataset.code || Flow.code;
   if (act === "detail") openFlowDetail(fid, true, code);
+  else if (act === "minutes") {
+    /* 卡片行点「分时」：先切到这只标的的详情，再取一次最新分时并滚过去 */
+    openFlowDetail(fid, false, code).then(() => {
+      const body = targetBodyEl(code);
+      renderFlowChart(fid, code, true);
+      const canvas = body && body.querySelector('[data-chart-code="' + code + '"]');
+      if (canvas) canvas.scrollIntoView({block: "center"});
+    });
+  }
   else if (act === "plan") startFlowJob("flow_plan", {流编号: fid, 代码: code ? [code] : []});
   else if (act === "check") openCheckDialog(fid, code);
   else if (act === "add") { if (cardEl) addTarget(cardEl); }

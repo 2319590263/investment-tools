@@ -188,9 +188,22 @@ def load_models_bundle():
     if cfg:
         for p in cfg.get("providers") or []:
             raw_key = str(p.get("api_key") or "")
-            key, src = aiplan.resolve_key(p, None)
             envc = str(p.get("key_env") or "")
             env_hit = bool(os.environ.get(envc)) if envc else False
+            # 只认这个 provider 自己的 key：环境变量 → 配置 api_key。
+            # aiplan.resolve_key 会在两者都缺时回退 Desktop\token.txt 首行，
+            # 那是「运行时兜底」，不代表这个 provider 配过 key（否则页面会出现
+            # 一排一模一样的掩码，看起来像每个服务商都配好了）。
+            own_key, own_src = None, None
+            if env_hit:
+                own_key, own_src = (os.environ.get(envc) or "").strip(), "环境变量 %s" % envc
+            elif raw_key.strip():
+                own_key, own_src = raw_key.strip(), "模型配置 api_key"
+            fallback = None
+            if not own_key:
+                fk, fs = aiplan.resolve_key(p, None)
+                if fk:
+                    fallback = fs or "未知来源"
             providers.append({
                 "名称": p.get("名称"),
                 "协议": p.get("协议"),
@@ -199,8 +212,10 @@ def load_models_bundle():
                 "key_env": envc,
                 "环境变量已设置": env_hit,
                 "配置内key": bool(raw_key.strip()),
-                "key掩码": aiplan.mask_key(key),
-                "key来源": src,
+                "已配置": bool(own_key),
+                "key掩码": aiplan.mask_key(own_key) if own_key else None,
+                "key来源": own_src,
+                "回退key来源": fallback,
                 "json_object": bool(p.get("json_object")),
                 "余额端点": p.get("余额端点"),
                 "模型可选": p.get("模型可选") or [],
@@ -282,6 +297,211 @@ def set_default_profile(name=None, by_phase=None):
     bundle["备份"] = rel(bkp) if bkp else None
     bundle["改动"] = changed
     return bundle, None
+
+
+PROVIDER_PROTOCOLS = ("openai-chat", "anthropic-messages")
+
+
+def _models_write(cfg, changed):
+    """写回模型配置（写前 .bak），返回 (bundle, 错误)。"""
+    written, bkp = save_like(MODELS_PATH, json.dumps(cfg, ensure_ascii=False, indent=1))
+    bundle = load_models_bundle()
+    bundle["已写入"] = written
+    bundle["备份"] = rel(bkp) if bkp else None
+    bundle["改动"] = changed
+    return bundle, None
+
+
+def _clean_role(role, providers):
+    """profile 的一个档（研判 / 复核）→ (规范化 dict 或 None, 错误)。
+
+    None 表示这一档留空（页面显示「未配置（跳过）」）；填了模型却没选 provider
+    属于手滑，直接拒绝，避免写出跑不起来的配置。
+    """
+    if role is None:
+        return None, None
+    if not isinstance(role, dict):
+        return None, "档位必须是对象"
+    provider = str(role.get("provider") or "").strip()
+    model = str(role.get("model") or "").strip()
+    if not provider and not model:
+        return None, None
+    if not provider:
+        return None, "填了模型但没选 provider"
+    if provider not in providers:
+        return None, "provider 不存在：%s" % provider
+    out = {"provider": provider, "model": model or None}
+    for key, cast, label in (("temperature", float, "temperature"),
+                             ("max_tokens", int, "max_tokens")):
+        raw = role.get(key)
+        if raw in (None, ""):
+            continue
+        try:
+            out[key] = cast(raw)
+        except (TypeError, ValueError):
+            return None, "%s 必须是数字" % label
+    params = role.get("参数")
+    if isinstance(params, str):
+        text = params.strip()
+        params = None
+        if text:
+            try:
+                params = json.loads(text)
+            except ValueError:
+                return None, "参数必须是合法 JSON（例如 {\"reasoning_effort\":\"high\"}）"
+    if params is not None and not isinstance(params, dict):
+        return None, "参数必须是 JSON 对象"
+    if params:
+        out["参数"] = params
+    return {k: v for k, v in out.items() if v is not None}, None
+
+
+def _drop_phase_ref(cfg, profile_name, replace_with=None):
+    """profile 改名 / 删除后，同步 profiles_by_phase 里的引用。"""
+    phase = dict(cfg.get("profiles_by_phase") or {})
+    changed = []
+    for key, value in list(phase.items()):
+        if str(value or "").strip() != profile_name:
+            continue
+        phase[key] = replace_with or ""
+        changed.append("profiles_by_phase.%s=%s" % (key, phase[key] or "跟随默认"))
+    if phase != (cfg.get("profiles_by_phase") or {}):
+        cfg["profiles_by_phase"] = phase
+    return changed
+
+
+def save_profile(action, data):
+    """新增 / 修改 / 删除 profile（只动 profiles；改名时同步默认与分时段指针）。"""
+    data = data or {}
+    action = str(action or "新增").strip()
+    name = str(data.get("名称") or "").strip()
+    orig = str(data.get("原名") or "").strip() or name
+    cfg, err = aiplan.load_models(MODELS_PATH)
+    if err or not isinstance(cfg, dict):
+        return None, err or "模型配置读不出内容"
+    profiles = dict(cfg.get("profiles") or {})
+    providers = {str(p.get("名称") or "") for p in (cfg.get("providers") or [])
+                 if isinstance(p, dict)}
+    if action == "删除":
+        if orig not in profiles:
+            return None, "profile 不存在：%s" % orig
+        if orig == str(cfg.get("默认_profile") or "").strip():
+            return None, "「%s」是当前默认 profile：先切一个默认再删" % orig
+        merged = dict(cfg)
+        profiles.pop(orig, None)
+        merged["profiles"] = profiles
+        changed = ["删除 profile %s" % orig] + _drop_phase_ref(merged, orig)
+        return _models_write(merged, changed)
+    if not name:
+        return None, "profile 名称不能为空"
+    if action == "新增" and name in profiles:
+        return None, "profile 已存在：%s" % name
+    if action == "修改":
+        if orig not in profiles:
+            return None, "profile 不存在：%s" % orig
+        if name != orig and name in profiles:
+            return None, "profile 已存在：%s" % name
+    role_pro, e1 = _clean_role(data.get("研判"), providers)
+    if e1:
+        return None, "研判档：" + e1
+    role_rev, e2 = _clean_role(data.get("复核"), providers)
+    if e2:
+        return None, "复核档：" + e2
+    role = {}
+    if role_pro is not None:
+        role["研判"] = role_pro
+    if role_rev is not None:
+        role["复核"] = role_rev
+    if not role:
+        return None, "至少要配一个档位（研判 / 复核）"
+    merged = dict(cfg)
+    profiles[name] = role
+    changed = ["%s profile %s" % (action, name)]
+    if action == "修改" and name != orig:
+        profiles.pop(orig, None)
+        changed += _drop_phase_ref(merged, orig, replace_with=name)
+        if str(merged.get("默认_profile") or "").strip() == orig:
+            merged["默认_profile"] = name
+            changed.append("默认_profile=%s" % name)
+    merged["profiles"] = profiles
+    return _models_write(merged, changed)
+
+
+def save_provider(action, data):
+    """新增 / 修改 / 删除 provider（改名会同步 profiles 里的引用）。
+
+    api_key 留空 = 不改动已有 key；填新值才覆盖。删除时如果还有 profile 在用，拒绝。
+    """
+    data = data or {}
+    action = str(action or "新增").strip()
+    name = str(data.get("名称") or "").strip()
+    orig = str(data.get("原名") or "").strip() or name
+    cfg, err = aiplan.load_models(MODELS_PATH)
+    if err or not isinstance(cfg, dict):
+        return None, err or "模型配置读不出内容"
+    providers = [dict(p) for p in (cfg.get("providers") or []) if isinstance(p, dict)]
+    by_name = {str(p.get("名称") or ""): p for p in providers}
+    if action == "删除":
+        if orig not in by_name:
+            return None, "provider 不存在：%s" % orig
+        used = [n for n, prof in (cfg.get("profiles") or {}).items()
+                if any(str(((prof or {}).get(r) or {}).get("provider") or "") == orig
+                       for r in ("研判", "复核") if isinstance((prof or {}).get(r), dict))]
+        if used:
+            return None, "还有 profile 在用「%s」：%s（先改掉或删掉这些 profile）" % (
+                orig, "、".join(used))
+        merged = dict(cfg)
+        merged["providers"] = [p for p in providers if str(p.get("名称") or "") != orig]
+        return _models_write(merged, ["删除 provider %s" % orig])
+    if not name:
+        return None, "provider 名称不能为空"
+    if action == "新增" and name in by_name:
+        return None, "provider 已存在：%s" % name
+    if action == "修改" and orig not in by_name:
+        return None, "provider 不存在：%s" % orig
+    if action == "修改" and name != orig and name in by_name:
+        return None, "provider 已存在：%s" % name
+    proto = str(data.get("协议") or "openai-chat").strip()
+    if proto not in PROVIDER_PROTOCOLS:
+        return None, "协议只支持 %s" % " / ".join(PROVIDER_PROTOCOLS)
+    base_url = str(data.get("base_url") or "").strip()
+    if not base_url.startswith(("http://", "https://")):
+        return None, "base_url 必须以 http:// 或 https:// 开头"
+    old = by_name.get(orig) if action == "修改" else {}
+    api_key = data.get("api_key")
+    api_key = str(api_key).strip() if api_key is not None else ""
+    models_opt = data.get("模型可选")
+    if isinstance(models_opt, str):
+        models_opt = [x.strip() for x in models_opt.replace("，", ",").split(",") if x.strip()]
+    entry = dict(old)
+    entry.update({
+        "名称": name, "协议": proto, "base_url": base_url,
+        "路径": str(data.get("路径") or "").strip()
+                or ("/v1/messages" if proto == "anthropic-messages" else "/chat/completions"),
+        "key_env": str(data.get("key_env") or "").strip(),
+        "json_object": bool(data.get("json_object")),
+        "模型可选": [str(x) for x in (models_opt or [])],
+        "备注": str(data.get("备注") or "").strip(),
+    })
+    if api_key:
+        entry["api_key"] = api_key
+    elif action == "新增":
+        entry["api_key"] = ""
+    merged = dict(cfg)
+    if action == "新增":
+        merged["providers"] = providers + [entry]
+    else:
+        merged["providers"] = [entry if str(p.get("名称") or "") == orig else p
+                               for p in providers]
+    changed = ["%s provider %s" % (action, name)]
+    if action == "修改" and name != orig:
+        for prof_name, prof in (merged.get("profiles") or {}).items():
+            for role_name in ("研判", "复核"):
+                node = (prof or {}).get(role_name)
+                if isinstance(node, dict) and str(node.get("provider") or "") == orig:
+                    node["provider"] = name
+                    changed.append("同步 %s.%s.provider=%s" % (prof_name, role_name, name))
+    return _models_write(merged, changed)
 
 
 def load_holdings_bundle():
