@@ -23,7 +23,7 @@ from .archive import delete_pick, delete_plan_log, delete_report, latest_pick_bu
 from . import alerts as alerts_store
 from . import flowapi
 from .holdings_sync import CAPTCHA_ROOT, captcha_image, holdings_python, install_hint, submit_captcha_answer
-from .jobs import JOBS, build_check_argv, build_pan_argv, build_run_argv, run_batch
+from .jobs import (JOBS, build_check_argv, build_run_argv, run_batch, start_pan_job)
 from .market import (build_market, build_state, build_symbols, kline_bundle,
                      latest_market_forecast, run_market_forecast)
 from .overview import build_overview
@@ -586,8 +586,8 @@ class Handler(BaseHTTPRequestHandler):
                                      api_base=body.get("api_base"), api_key=body.get("api_key")))
                 return self._json({"ok": True, "id": job["id"], "命令": job["命令"], "清理": fresh})
             elif kind == "pan":
-                job = JOBS.start(kind, build_pan_argv(), {"label": "抓取大盘快照"},
-                                 label="抓取大盘快照（pan post）")
+                # body.pick=true → 同一任务里顺带跑一轮荐股（批注 5），逻辑在 jobs.start_pan_job
+                job = start_pan_job(body)
                 return self._json({"ok": True, "id": job["id"], "命令": job["命令"], "清理": fresh})
             elif kind == "pick":
                 opts = pick_param(body)

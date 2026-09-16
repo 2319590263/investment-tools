@@ -16,8 +16,11 @@ from .pick import PICK_STYLES, pick_style_of
 
 STALE_DAYS = 3
 FACET_OTHER = "未定"
+STYLE_PICKS = ("超短线", "短线", "中线", "长线")     # 大盘快照页的四档推荐（批注 5）
 RANK_NOTE = ("排名看模型评分（0-100，模型给的推荐分）；机械分是按《机器打分逻辑.txt》"
              "算的辅助参考，不参与排名")
+STYLE_NOTE = ("每档取模型评分最高的那一只（同分看机械分），同一只标的只占一档；"
+              "模型这次没点评到的档位如实留空，不用机械分硬凑")
 
 
 def build_rows(doc, held=None, watch=None):
@@ -116,6 +119,30 @@ def apply_quotes(rows, quote_map, refresh=False):
         row["价格来源"] = "东财实时行情"
         row["价格时间"] = time.strftime("%H:%M:%S")
     return rows
+
+
+def style_picks(rank=None, styles=STYLE_PICKS, held=None, watch=None):
+    """四档打法各挑一只（批注 5）：模型评分降序、同分看机械分，同一只只占一档。
+
+    没有该打法的模型点评就留空并写明原因——不用机械分硬凑一只冒充「中线推荐」。
+    """
+    rows = (rank if rank is not None else build_rank(held, watch)).get("行") or []
+    out, used = [], set()
+    for name in styles:
+        hit = None
+        for row in rows:
+            if row.get("打法") != name or row.get("代码") in used:
+                continue
+            hit = row
+            break
+        if hit:
+            used.add(hit["代码"])
+        out.append({
+            "打法": name, "行": hit,
+            "说明": None if hit else "本次模型没有点评「%s」这一档（30 只推荐榜里没有，"
+                                   "可以重跑一次荐股或去荐股页看完整榜）" % name,
+        })
+    return {"行": out, "口径": STYLE_NOTE, "打法": [r["打法"] for r in out]}
 
 
 def empty_rank(note=None):

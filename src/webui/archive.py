@@ -49,6 +49,10 @@ def summarize_payload(payload):
         "profile": (payload.get("profile") or {}).get("名称"),
         "交易日": payload.get("trade_date"),
         "生成时间": payload.get("generated_at"),
+        # 批注 2：报告头要显示「用的是哪天的数据」；批注 1：复核跳过的原因
+        "数据日期": (payload.get("数据") or {}).get("事实包日期"),
+        "复核跳过原因": ((payload.get("复核") or {}).get("跳过原因")
+                    or (payload.get("复核") or {}).get("error")),
         "note": payload.get("note"),
     }
 

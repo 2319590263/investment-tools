@@ -79,6 +79,34 @@ class TestBuildRows(unittest.TestCase):
         self.assertEqual(len(empty["打法"]), 5)
         self.assertTrue(empty["提示"])
 
+    def test_style_picks_one_per_style(self):
+        """批注 5：四档打法各一只；没有该档点评就留空并写原因。"""
+        doc = dict(NEW_DOC, 推荐榜=[
+            {"代码": "600967", "名称": "内蒙一机", "打法": "超短线", "评分": 91, "排名": 1},
+            {"代码": "002463", "名称": "沪电股份", "打法": "超短线", "评分": 80, "排名": 2},
+            {"代码": "512890", "名称": "红利低波ETF", "打法": "长线", "评分": 70, "排名": 3},
+        ])
+        got = self.rank.style_picks({"行": self.rank.build_rows(doc)})
+        by = {r["打法"]: r for r in got["行"]}
+        self.assertEqual([r["打法"] for r in got["行"]], ["超短线", "短线", "中线", "长线"])
+        self.assertEqual(by["超短线"]["行"]["代码"], "600967", "同档取评分最高的")
+        self.assertEqual(by["长线"]["行"]["代码"], "512890")
+        self.assertIsNone(by["短线"]["行"])
+        self.assertIn("短线", by["短线"]["说明"])
+        self.assertTrue(got["口径"])
+
+    def test_style_picks_never_repeat_stock(self):
+        """同一只标的只占一档（模型把它标成两档时也不能重复推荐）。"""
+        rows = [
+            {"代码": "600967", "名称": "x", "打法": "超短线", "推荐度": 90, "机械分": 70},
+            {"代码": "600967", "名称": "x", "打法": "短线", "推荐度": 88, "机械分": 70},
+            {"代码": "600000", "名称": "y", "打法": "短线", "推荐度": 60, "机械分": 50},
+        ]
+        got = self.rank.style_picks({"行": rows})
+        by = {r["打法"]: r["行"] for r in got["行"]}
+        self.assertEqual(by["超短线"]["代码"], "600967")
+        self.assertEqual(by["短线"]["代码"], "600000")
+
     def test_apply_quotes_only_when_refresh(self):
         rows = self.rank.build_rows(NEW_DOC)
         quotes = {"600967": {"价格": 13.99, "涨跌幅_pct": 3.3}}

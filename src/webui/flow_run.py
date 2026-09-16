@@ -349,6 +349,11 @@ def _plan_one(log, ctl, doc, node, opts):
     if (opts or {}).get("review"):
         review = track_run.call_review(log, s, fact["文本"], plan_obj,
                                        research.get("raw_text"), ctl)
+    else:
+        # 批注 1：报告页的「复核 已跳过」要能说清楚为什么——默认就是没勾复核档
+        review["跳过原因"] = ("本次没有勾选「复核档」：在「交易流 → 计划与体检」卡勾上"
+                              "「含复核档」再算一次，就会有复核质询（多一次模型调用）")
+        log("[..] 复核档：已跳过（本次没有勾选复核档）")
     payload = {
         "tool": "webui-track", "schema_version": track.SCHEMA_VERSION, "phase": "track",
         "generated_at": now_str(),

@@ -60,6 +60,7 @@ webserver  ← __main__（python -m webui）
    │     ├── flowview    交易流页面数据：流卡片 / 标的行 / 详情 / 机械检查（报价 → 盈亏 → 提醒 → 消息队列）
    │     │               / 行内图（分时 minute 或日K day，计划买卖线同一份口径）
    │     └── flowapi     交易流的 HTTP 入口（webserver 只做分派，避免它继续膨胀）
+   ├── pickrank    荐股榜 → 页面行（模型评分降序）+ **四档打法推荐**（超短/短/中/长各一只，大盘快照页用）
    ├── quotes      行情取数：批量报价（东财，1 次请求）+ 当日分时（腾讯，60 秒缓存 + 串行限速）
    ├── freshness   数据新鲜度：早于最近交易日的 pan / stock3d 快照**直接删除**（不进回收站），
    │               保证事实包不会引用过期数据（测试用 AIPLAN_NO_PURGE=1 关闭）
@@ -171,7 +172,9 @@ viewApi("report").refreshReports();
    `GET /api/flows?refresh=1` 用一次批量报价覆盖所有在跑的标的，`flowview.check_pass` 机械判定
    盈亏、接近带与触及、达标/止损，把新提醒写进 `data/ai/alerts.jsonl`（同类型同价位当天只一次）；
    `overview` 把流卡区（一行 = 一只标的）并进总控台，所以人在别的页面（开着自动刷新）也在盯。
-   模型只在两处出手：`flow_run.run_plan`（开流首份 / 盘后过点一键 / 手动，按这只标的的打法出计划；
+   `jobs.start_pan_job` 把「抓大盘快照」和「顺带荐股」串成同一个任务（pan 子进程 → `pick_run.run_pick`），
+大盘快照页读最新荐股产物给四档打法各推一只。
+模型只在两处出手：`flow_run.run_plan`（开流首份 / 盘后过点一键 / 手动，按这只标的的打法出计划；
    事实包最前面是「交易流状态」，成交与盈亏是权威口径）与 `flow_run.run_check`
    （手动体检：stock3d 消息面 + 量价 + 板块大盘 + 流状态 → 四档结论；数据太旧可先跑
    `stock3d.py pull|news` 子进程）。成交来自 `data/user/交易台账.md`（同花顺同步写入，按委托去重）

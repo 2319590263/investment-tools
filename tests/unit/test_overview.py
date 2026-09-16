@@ -176,6 +176,26 @@ class TestPlanLines(Fixture):
         os.utime(path, (time.time() + 5, time.time() + 5))
         self.assertEqual(self.ov.report_levels(path)["止损"], 11.5)
 
+    def test_voided_entries_are_not_levels(self):
+        """批注 4：被硬约束作废的条目不算可执行价位（不买点 / 不卖点 / 不上图）。"""
+        path = self._report(plan=[
+            {"动作": "建仓", "价格区间": [13.4, 14.0], "股数": 200, "优先级": 2,
+             "作废": True, "作废原因": "预算不足：买不到 1 手"},
+            {"动作": "减仓", "价格区间": [15.2, 15.4], "优先级": 3, "股数": 100},
+        ])
+        lv = self.ov.report_levels(path)
+        self.assertIsNone(lv["买点"], "作废的建仓条目不该当买点")
+        self.assertEqual(lv["减仓"]["下沿"], 15.2)
+        path = self._report()
+        self.assertEqual(self.ov.report_levels(path)["止损"], 12.19)
+        with mock.patch.object(self.ov.aiplan, "read_json",
+                               side_effect=AssertionError("命中缓存时不该重复解析")):
+            again = self.ov.report_levels(path)
+        self.assertEqual(again["止损"], 12.19)
+        self._report(levels={"止损价": 11.5, "目标位": [], "支撑": [], "压力": []})
+        os.utime(path, (time.time() + 5, time.time() + 5))
+        self.assertEqual(self.ov.report_levels(path)["止损"], 11.5)
+
     def test_trigger_marks(self):
         levels = {"买点": {"下沿": 13.4, "上沿": 14.0, "动作": "建仓", "股数": 200},
                   "止损": 12.19, "目标": [{"价位": 15.22, "依据": "平台高"}],

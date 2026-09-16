@@ -42,7 +42,19 @@ def build_market():
             "generated_at": (s3doc or {}).get("generated_at"),
             "symbols": symbols,
         },
+        # 批注 5：大盘快照页的「四档打法推荐」——读最新一份荐股产物，每档一只（没有就留空）
+        "荐股四档": _style_picks(),
     }
+
+
+def _style_picks():
+    """最新荐股产物 → 超短线/短线/中线/长线 各一只（没有产物时返回空骨架，不抛错）。"""
+    from . import pickrank
+    try:
+        return pickrank.style_picks()
+    except Exception as exc:                  # noqa: BLE001  榜单坏了不该拖垮大盘快照页
+        return {"行": [], "口径": pickrank.STYLE_NOTE, "打法": [],
+                "错误": "读取荐股榜失败：%s" % str(exc)[:120]}
 
 
 def build_symbols():

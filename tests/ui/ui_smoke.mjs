@@ -257,6 +257,94 @@ if (hasPlan) {
   console.log(`INFO  最新报告没有模型计划（可能上次模型调用失败），跳过卡片顺序断言（${top3}）`);
 }
 /* 实盘复核卡片：时段 + 实盘价（或明确的取不到提示）必须渲染出来 */
+/* 批注 3：K 线图例改成「买点 / 卖点」（任何报告都该是这套口径） */
+try {
+  const legendTxt = await page.locator("#kline-legend").innerText().catch(() => "");
+  const legendOk = /买点/.test(legendTxt) && /卖点/.test(legendTxt) &&
+    !/支撑/.test(legendTxt) && !/压力/.test(legendTxt);
+  console.log(`${legendOk ? "PASS" : "FAIL"}  K 线图例是「买点 / 卖点」（${legendTxt.replace(/\s+/g, " ").trim()}）`);
+  if (!legendOk) failed++;
+} catch (e) {
+  console.log("FAIL  K 线图例断言异常：" + String(e).slice(0, 90));
+  failed++;
+}
+/* 批注 1/2/4：复核跳过原因、数据日期标签、作废条目单独收起——
+   这些字段只有交易流产物（*_track.json）才有：走用户真实路径，从交易流卡片点「打开计划报告」 */
+await gotoView("flow");
+await page.waitForSelector("#flow-list [data-plan]", { timeout: 30000 }).catch(() => {});
+const planLinks = await page.locator("#flow-list [data-plan]").count();
+if (!planLinks) {
+  console.log("INFO  交易流里还没有计划产物，跳过复核/数据日期/作废断言");
+} else {
+  await page.locator("#flow-list [data-plan]").first().click();
+  await page.waitForSelector("#report-struct .rep-head", { timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(3000);
+  /* 「数据日期」只有写了 数据.事实包日期 的产物才有（旧产物没有）：挑一份有它的来看 */
+  const planPaths = await page.evaluate(() => Array.from(
+    document.querySelectorAll("#flow-list [data-plan]"), el => el.dataset.plan));
+  let factDates = null, hasVoid = false, chosen = "";
+  const seen = [];
+  for (const p of planPaths) {
+    const rep = await page.evaluate(path => fetch("/api/report?path=" + encodeURIComponent(path))
+      .then(r => r.json()).catch(() => null), p);
+    const dd = rep && rep.json && rep.json["数据"] && rep.json["数据"]["事实包日期"];
+    const voided = ((((rep || {}).json || {})["研判"] || {}).json || {})["计划"] || [];
+    seen.push({p: p, dd: (dd && (dd["项"] || []).length) ? dd : null,
+               v: (voided || []).filter(e => e && e["作废"]).length});
+  }
+  /* 优先挑「既有数据日期、又有作废条目」的那份；退而求其次挑有数据日期的 */
+  const pick = seen.find(x => x.dd && x.v) || seen.find(x => x.dd) || seen[0] || {};
+  factDates = pick.dd || null;
+  hasVoid = !!pick.v;
+  chosen = pick.p || "";
+  if (chosen) {
+    /* 走「打开计划报告」那条链接（报告下拉里只列 data/ai 下的报告，不含 track 产物） */
+    await gotoView("flow");
+    await page.waitForTimeout(400);
+    await page.locator('#flow-list [data-plan="' + chosen + '"]').first().click();
+    await page.waitForSelector("#report-struct .rep-head", { timeout: 30000 }).catch(() => {});
+    await page.waitForTimeout(2500);
+  }
+  const headTxt = await page.locator("#report-struct .rep-sub").first().innerText().catch(() => "");
+  const skipOk = /复核 已跳过/.test(headTxt);
+  console.log(`${skipOk ? "PASS" : "FAIL"}  复核标签写明「已跳过」（${headTxt.replace(/\s+/g, " ").slice(0, 90)}）`);
+  if (!skipOk) failed++;
+  const skipTitle = await page.evaluate(() => {
+    const el = Array.from(document.querySelectorAll("#report-struct .rep-sub .chip"))
+      .find(x => /复核/.test(x.textContent) && x.getAttribute("title"));
+    return el ? el.getAttribute("title") : "";
+  });
+  console.log(`${skipTitle ? "PASS" : "FAIL"}  复核标签带原因（${String(skipTitle).slice(0, 48)}…）`);
+  if (!skipTitle) failed++;
+  if (!factDates) {
+    console.log("INFO  手头这份产物没写「事实包日期」（旧产物），跳过数据日期标签断言");
+  } else {
+    const hasDate = await page.locator("#rep-data-date").count();
+    const dateTitle = hasDate
+      ? await page.locator("#rep-data-date").getAttribute("title").catch(() => "") : "";
+    const dateOk = hasDate && /日K最新交易日/.test(dateTitle || "");
+    console.log(`${dateOk ? "PASS" : "FAIL"}  报告头有「数据日期」标签（${String(dateTitle).slice(0, 60)}）`);
+    if (!dateOk) failed++;
+  }
+  const planBody = await page.locator("#report-struct .card").filter({hasText: "交易计划"})
+    .first().innerText().catch(() => "");
+  const strayVoid = /作废/.test(planBody.split("已作废的条目")[0] || "");
+  console.log(`${!strayVoid ? "PASS" : "FAIL"}  主计划表里没有作废条目（${planBody.split("\n")[0]}）`);
+  if (strayVoid) failed++;
+  const voidTables = await page.locator("#report-struct details.adv summary").allInnerTexts()
+    .catch(() => []);
+  const voidOk = voidTables.some(x => /已作废的条目/.test(x));
+  if (!hasVoid) {
+    console.log("INFO  这份计划没有被作废的条目，跳过「作废条目折叠表 / K 线隐藏」断言");
+  } else {
+    console.log(`${voidOk ? "PASS" : "FAIL"}  作废条目收在默认收起的表里（${voidTables.join("/")}）`);
+    if (!voidOk) failed++;
+    const klineSrc = await page.locator("#kline-src").innerText().catch(() => "");
+    const hideOk = /已隐藏 .* 条作废价位的线/.test(klineSrc);
+    console.log(`${hideOk ? "PASS" : "FAIL"}  K 线标出隐藏了几条作废价位线（${klineSrc.slice(-40)}）`);
+    if (!hideOk) failed++;
+  }
+}
 try {
   await page.waitForSelector("#plan-card #plan-body .gauge-row", { timeout: 30000 });
   const planText = await page.innerText("#plan-card");
@@ -334,6 +422,28 @@ if (!candOk) failed++;
 const poolRows = await page.locator("#pick-result .card:last-of-type tbody tr").count();
 console.log(`${poolRows > 0 ? "PASS" : "FAIL"}  候选池表已渲染（${poolRows} 行）`);
 if (!(poolRows > 0)) failed++;
+
+/* ---- 大盘快照页：批注 5 的四档打法推荐（超短 / 短 / 中 / 长 各一只） ---- */
+await gotoView("market");
+await page.waitForSelector("#market-body .card", { timeout: 25000 }).catch(() => {});
+const styleTable = await page.locator("#style-picks").count();
+console.log(`${styleTable > 0 ? "PASS" : "FAIL"}  大盘快照页有「打法推荐」表（#style-picks）`);
+if (!styleTable) failed++;
+if (styleTable) {
+  const heads = await page.locator("#style-picks thead").innerText().catch(() => "");
+  const headsOk = /打法/.test(heads) && /模型评分/.test(heads) && /机械分/.test(heads);
+  console.log(`${headsOk ? "PASS" : "FAIL"}  打法推荐列头（${heads.replace(/\s+/g, " ").trim()}）`);
+  if (!headsOk) failed++;
+  const styleCells = await page.locator("#style-picks tbody tr td:first-child").allInnerTexts()
+    .catch(() => []);
+  const fourOk = ["超短线", "短线", "中线", "长线"].every(x =>
+    styleCells.some(c => c.trim() === x));
+  console.log(`${fourOk ? "PASS" : "FAIL"}  四档打法齐（${styleCells.map(x => x.trim()).join("/")}）`);
+  if (!fourOk) failed++;
+  const withPick = await page.locator("#pan-with-pick").count();
+  console.log(`${withPick ? "PASS" : "FAIL"}  抓大盘快照时有「同时荐股」开关`);
+  if (!withPick) failed++;
+}
 
 
 /* ---- 交易流页：盯盘控件 + 流卡区 + 开流表单 + 详情（不点「体检 / 重算」，不打模型） ---- */

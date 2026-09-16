@@ -276,6 +276,76 @@ def build_pan_argv():
     return [PYTHON, "-X", "utf8", os.path.join(ROOT, "pan.py"), "post"]
 
 
+def stream_argv(log, ctl, argv):
+    """跑一个子进程并把输出逐行写进任务日志（返回退出码）。取消时杀掉它。"""
+    proc = subprocess.Popen(argv, cwd=ROOT, env=child_env(), stdin=subprocess.DEVNULL,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                            encoding="utf-8", errors="replace", bufsize=1)
+    ctl["proc"] = proc
+    rc = None
+    try:
+        for line in proc.stdout:
+            line = line.rstrip()
+            if ctl.get("cancel"):
+                proc.terminate()
+                break
+            if line.strip():
+                log("    " + line)
+    except Exception:                      # noqa: BLE001  读输出被打断按失败处理
+        proc.terminate()
+    finally:
+        try:
+            rc = proc.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            rc = proc.wait()
+        ctl["proc"] = None
+    return rc
+
+
+def run_pan_and_pick(log, ctl, pick_opts):
+    """批注 5：抓大盘快照（pan post）**顺带**跑一轮荐股，给大盘快照页一份四档推荐。
+
+    两步串行、日志连着看：pan 不能失败（失败直接报错），荐股失败不影响 pan 的产物，
+    只在结果里带 error 让页面如实标出来。
+    """
+    from .pick_run import run_pick
+    log("[..] 第一步：抓大盘快照（python main.py pan post，只读、不调模型）")
+    rc = stream_argv(log, ctl, build_pan_argv())
+    if ctl.get("cancel"):
+        return {"__canceled__": True}
+    log("[%s] pan 结束（退出码 %s）" % ("OK" if rc == 0 else "WARN", rc))
+    if rc not in (0, None):
+        return {"error": "大盘快照抓取失败（退出码 %s）：荐股这一步没有跑" % rc}
+    log("[..] 第二步：荐股（全大盘扫描 → 机械打分 → 前 %d 只交模型；这一步会花模型钱）"
+        % pick_opts.get("model_top", 0))
+    try:
+        out = run_pick(log, ctl, pick_opts)
+    except Exception as exc:               # noqa: BLE001  荐股失败不该让 pan 白跑
+        log("[FAIL] 荐股失败：%s" % exc)
+        return {"error": "荐股失败：%s" % str(exc)[:200]}
+    if isinstance(out, dict) and out.get("__canceled__"):
+        return {"__canceled__": True}
+    log("[OK] 大盘快照 + 荐股都完成：四档推荐见大盘快照页「打法推荐」卡")
+    return {"pan_ok": True, "荐股": out}
+
+
+def start_pan_job(body):
+    """大盘快照任务：默认只跑 pan post；body.pick=true 时同一任务里再跑一轮荐股（批注 5）。"""
+    body = body or {}
+    if not body.get("pick"):
+        return JOBS.start("pan", build_pan_argv(), {"label": "抓取大盘快照"},
+                          label="抓取大盘快照（pan post）")
+    from .pick import pick_param            # 放函数里：避免 jobs ↔ pick 的导入环
+    opts = pick_param({})
+    meta = {"label": "抓大盘 + 荐股", "候选池": opts["pool_size"],
+            "送模型": opts["model_top"], "排除": opts["exclude"]}
+    label = ("抓大盘快照 + 荐股（候选池 %d 只 → 送模型 %d 只 → 1 次模型调用）"
+             % (opts["pool_size"], opts["model_top"]))
+    return JOBS.start("pan", [], meta, label=label,
+                      func=lambda log, ctl: run_pan_and_pick(log, ctl, opts))
+
+
 def build_run_argv(body):
     phase = (body.get("phase") or "post").strip()
     if phase not in PHASES:

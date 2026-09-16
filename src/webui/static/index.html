@@ -178,6 +178,10 @@
             <div class="card-b">
               <div class="run-line" id="flow-pick"></div>
               <div class="run-line">
+                <label class="sw"><input type="checkbox" id="flow-review" /> 含复核档（多一次模型调用，
+                  报告页会多出「复核档质询」）</label>
+              </div>
+              <div class="run-line">
                 <span class="chip" id="flow-status">待运行</span>
                 <code class="cmd" id="flow-cmd">POST /api/jobs {kind:"flow_plan"}</code></div>
               <pre class="console" id="flow-console"><span class="muted">模型只在你点「计算计划 / 体检」时调用（每次 1 次）…</span></pre>
@@ -498,6 +502,11 @@
         <div class="toolbar">
           <span class="muted" id="market-src"></span>
           <div class="spacer"></div>
+          <label class="sw"><input type="checkbox" id="pan-with-pick" checked /> 同时荐股
+            <span class="muted">（超短/短/中/长各一只）</span></label>
+          <button class="btn ghost" id="btn-pan-run"
+                  title="跑一次 pan.py post；勾了「同时荐股」就顺带跑一轮全大盘荐股（会花模型钱）">抓大盘快照</button>
+          <span class="muted" id="pan-run-state"></span>
           <button class="btn ghost" id="btn-market-reload">刷新</button>
         </div>
         <div id="market-body"></div>

@@ -766,7 +766,10 @@ export function initFlowView() {
   if (plan) plan.addEventListener("click", () => {
     const fid = Flow.pickFlow;
     if (!fid) { toast("还没有进行中的交易流：先开一条流再加标的", "bad"); return; }
-    startFlowJob("flow_plan", {流编号: fid, 代码: Flow.pickCode ? [Flow.pickCode] : []});
+    const review = !!($("#flow-review") || {}).checked;
+    startFlowJob("flow_plan", {流编号: fid, 代码: Flow.pickCode ? [Flow.pickCode] : [],
+                               review: review});
+    if (review) toast("本次含复核档：每只标的会多一次模型调用", "warn");
   });
   const check = $("#btn-flow-check");
   if (check) check.addEventListener("click", () => {

@@ -115,6 +115,9 @@ def report_levels(path):
 
     buy = sell = None
     for item in (plan.get("计划") or []):
+        # 被硬约束 / 确定性规则作废的条目不算「可执行价位」（批注 4：作废的价位不该上图和卡片）
+        if isinstance(item, dict) and item.get("作废"):
+            continue
         act = item.get("动作")
         if is_noop(act):
             continue

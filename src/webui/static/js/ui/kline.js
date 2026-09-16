@@ -14,6 +14,19 @@ export const KLINE_ZOOM = [
 
 export const KLINE_ZOOM_DEFAULT = 3;
 
+
+/* 被硬约束 / 确定性规则作废的计划条目 → 它们涉及的价位（区间两端都算）。 */
+export function voidedPrices(planJson) {
+  const out = [];
+  ((planJson || {})["计划"] || []).forEach(e => {
+    if (!e || !e["作废"]) return;
+    const rng = e["价格区间"];
+    const vals = Array.isArray(rng) ? rng : [rng];
+    vals.forEach(x => { const v = num(x); if (v !== null) out.push(v); });
+  });
+  return out;
+}
+
 export function applyKlineZoom() {
   const k = window.__kline;
   if (!k) return;
@@ -200,11 +213,23 @@ export async function loadStructKline(b) {
     const v = num(x && x["价位"]);
     if (v !== null) levels.push({ v: v, color: color, dash: dash, text: type + " " + fmt(v) });
   });
-  add(prices["支撑"], "#4c8dff", "支撑");
-  add(prices["压力"], "#e2b03c", "压力");
-  add(prices["目标位"], "#2ec27e", "目标", true);
+  /* 批注 3：支撑 / 压力 改成 买点 / 卖点（跟交易计划的操作口径一致）。
+   * 批注 4：被硬约束作废的条目，它的价位不该继续画在图上（会被当成还能执行的操作）。 */
+  const voided = voidedPrices(planJson);
+  const isVoided = v => voided.some(x => Math.abs(x - v) <= Math.max(v * 0.0005, 0.002));
+  const skipped = [];
+  const keep = (arr, color, type, dash) => add((Array.isArray(arr) ? arr : []).filter(x => {
+    const v = num(x && x["价位"]);
+    if (v !== null && isVoided(v)) { skipped.push({ v: v, type: type }); return false; }
+    return true;
+  }), color, type, dash);
+  keep(prices["支撑"], "#4c8dff", "买点");
+  keep(prices["压力"], "#e2b03c", "卖点");
+  keep(prices["目标位"], "#2ec27e", "止盈点", true);
   const stop = num(prices["止损价"]);
-  if (stop !== null) levels.push({ v: stop, color: "#f05a63", dash: true, text: "止损 " + fmt(stop) });
+  if (stop !== null && !isVoided(stop)) {
+    levels.push({ v: stop, color: "#f05a63", dash: true, text: "止损 " + fmt(stop) });
+  }
   const cur = num(((b || {})["摘要"] || {})["现价"]);
   window.__kline = { canvas: canvas, data: data, levels: levels, cur: cur, idx: KLINE_ZOOM_DEFAULT };
   if (!data.bars.length) {
@@ -220,11 +245,15 @@ export async function loadStructKline(b) {
     lg.innerHTML = [
       ["#f05a63", "阳线"], ["#2ec27e", "阴线"],
       [KLINE_COLORS.ma5, "MA5"], [KLINE_COLORS.ma10, "MA10"], [KLINE_COLORS.ma20, "MA20"],
-      ["#4c8dff", "支撑"], ["#e2b03c", "压力"], ["#f05a63", "止损"], ["#2ec27e", "目标"],
+      ["#4c8dff", "买点"], ["#e2b03c", "卖点"], ["#f05a63", "止损"], ["#2ec27e", "止盈点"],
     ].map(x => '<span><i style="background:' + x[0] + '"></i>' + x[1] + "</span>").join("");
   }
   const src = $("#kline-src");
-  if (src) src.textContent = (data["文件"] || "") + " · 缓存 " + data.bars.length + " 根 · 来源 " + (data["来源"] || "—") + " / " + (data["复权"] || "—");
+  if (src) {
+    src.textContent = (data["文件"] || "") + " · 缓存 " + data.bars.length + " 根 · 来源 " +
+      (data["来源"] || "—") + " / " + (data["复权"] || "—") +
+      (skipped.length ? " · 已隐藏 " + skipped.length + " 条作废价位的线" : "");
+  }
   const zin = $("#k-zoom-in");
   if (zin) zin.addEventListener("click", () => klineZoom(-1));
   const zout = $("#k-zoom-out");

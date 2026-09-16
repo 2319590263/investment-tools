@@ -83,25 +83,77 @@ export function marketForecastCard(res) {
   return card("大盘走势预测", html);
 }
 
-/* 一键抓取大盘快照（批注 4）：跑一次 pan.py post，落 data/pan/<今天>/，不调模型。 */
+/* 批注 5：四档打法推荐（超短线 / 短线 / 中线 / 长线 各一只）。
+ * 数据来自最新一份荐股产物（点「一键抓取大盘快照」时勾上「同时荐股」就会顺带跑一轮）。 */
+export function stylePicksCard(block) {
+  const rows = (block || {})["行"] || [];
+  let html = "";
+  if (!rows.length) {
+    html = '<div class="muted">还没有荐股产物：在下面点「一键抓取大盘快照」时勾上' +
+      "「同时荐股」，或者去「荐股」页跑一次全大盘扫描。</div>";
+    return card("打法推荐（四档各一只）", html);
+  }
+  html = '<div class="table-wrap" style="max-height:none"><table class="tbl" id="style-picks">' +
+    "<thead><tr><th>打法</th><th>标的</th><th class='num'>现价</th><th class='num'>涨跌幅</th>" +
+    "<th class='num'>模型评分</th><th class='num'>机械分</th><th>评级</th><th>理由</th></tr></thead><tbody>";
+  rows.forEach(r => {
+    const t = r["行"];
+    html += "<tr><td>" + chip(r["打法"], "accent") + "</td>";
+    if (!t) {
+      html += '<td colspan="7" class="muted">' + esc(r["说明"] || "本次没有该档推荐") + "</td>";
+    } else {
+      html += "<td><b>" + esc(t["名称"] || "") + '</b> <span class="mono muted">' +
+        esc(t["代码"] || "") + "</span></td>" +
+        '<td class="num">' + (t["现价"] == null ? "—" : fmt(t["现价"], 3)) + "</td>" +
+        '<td class="num ' + kindClass(t["涨跌幅_pct"]) + '">' + fmtPct(t["涨跌幅_pct"]) + "</td>" +
+        '<td class="num"><b>' + (t["模型分"] == null ? "—" : fmt(t["模型分"], 0)) + "</b></td>" +
+        '<td class="num muted">' + (t["机械分"] == null ? "—" : fmt(t["机械分"], 1)) + "</td>" +
+        "<td>" + esc(t["评级"] || "—") + "</td>" +
+        '<td class="wrap muted">' + esc(t["理由"] || "—") + "</td>";
+    }
+    html += "</tr>";
+  });
+  html += "</tbody></table></div>";
+  html += '<div class="muted" style="margin-top:8px">' + esc((block || {})["口径"] || "") +
+    "（价格是荐股产物里的快照价，要看实时价去「荐股」页）</div>";
+  if ((block || {})["错误"]) html += '<div class="fail">' + esc(block["错误"]) + "</div>";
+  return card("打法推荐（四档各一只）", html);
+}
+
+
+/* 一键抓取大盘快照（批注 4）：跑一次 pan.py post，落 data/pan/<今天>/；
+ * 勾上「同时荐股」就顺带跑一轮全大盘荐股（批注 5，会花模型钱）。 */
 export async function runPanJob() {
   const btn = $("#btn-pan-run");
   const st = $("#pan-run-state");
   if (btn) btn.disabled = true;
   if (st) st.textContent = "正在抓取 …";
   try {
-    const res = await api("/api/jobs", {method: "POST", body: JSON.stringify({kind: "pan"})});
+    const withPick = !!($("#pan-with-pick") || {}).checked;
+    const res = await api("/api/jobs", {
+      method: "POST", body: JSON.stringify({kind: "pan", pick: withPick})});
     if (!res.ok) throw new Error(res.error || "启动失败");
     const _fresh = freshNote(res);
     if (_fresh) toast(_fresh, "warn");
+    /* 勾了「同时荐股」这轮要 5-10 分钟（全市场扫描 + 一次模型调用）：轮询放宽到 30 分钟并报进度 */
     let guard = 0;
-    while (guard++ < 200) {
+    while (guard++ < 2000) {
       const j = await api("/api/jobs/" + res.id + "?from=0");
+      if (st && j.status === "running") {
+        const last = (j.lines || [])[(j.lines || []).length - 1];
+        st.textContent = (withPick ? "抓大盘 + 荐股中 " : "抓取中 ") + j.elapsed + "s" +
+          (last ? " ｜ " + String(last.text || "").slice(0, 60) : "");
+      }
       if (j.status !== "running") {
         if (btn) btn.disabled = false;
         if (j.status === "done") {
-          if (st) st.textContent = "已抓取，用时 " + j.elapsed + "s";
-          toast("大盘快照已更新", "ok");
+          const r = j.result || {};
+          if (st) {
+            st.textContent = (withPick ? "大盘快照 + 荐股完成 " : "已抓取 ") + "用时 " +
+              j.elapsed + "s";
+          }
+          if (r["error"]) toast("大盘快照已更新，但荐股失败：" + r["error"], "warn");
+          else toast(withPick ? "大盘快照已更新，四档推荐见「打法推荐」卡" : "大盘快照已更新", "ok");
           await loadMarket();
         } else {
           if (st) st.textContent = "抓取失败（退出码 " + j.exit_code + "）";
@@ -188,21 +240,20 @@ export async function loadMarket() {
     body.innerHTML = '<div class="card"><div class="card-h"><span>没有行情快照</span>' +
       '<span class="muted">data/pan/ 下没有可用的最新快照</span></div>' +
       '<div class="card-b"><div class="row" style="gap:8px;align-items:center;flex-wrap:wrap">' +
-      '<button class="btn primary" id="btn-pan-run">一键抓取大盘快照</button>' +
-      '<span class="muted" id="pan-run-state"></span></div>' +
+      "右上角「抓大盘快照」按钮可以直接跑一次" +
+      "（勾上「同时荐股」就顺带出一份四档推荐）。</div>" +
       '<div class="hint">过期的快照已按「事实包不许用过期数据」自动清理' +
       '（移入 data/ai/.trash/stale/，7 天后真删）。想恢复大盘背景与事实包里的量能数据，' +
       '先跑一次：<code>python main.py pan post</code>；个股消息面用 ' +
       '<code>python main.py stock3d pull &lt;代码&gt;</code>（或直接在「运行研判」里跑）。' +
       '</div></div></div>';
-    const btn = $("#btn-pan-run");
-    if (btn) btn.addEventListener("click", runPanJob);
     return;
   }
   const dd = doc.data || {};
   const parts = [];
   const fcRes = await api("/api/market/forecast").catch(() => null);
   parts.push(marketForecastCard(fcRes));
+  parts.push(stylePicksCard(m["荐股四档"]));
 
   const idx = (dd.indices_volume || {})["指数_同花顺"] || (dd.indices_volume || {})["指数_东财"] || [];
   if (idx.length) {
@@ -354,4 +405,13 @@ export function sectorTable(rows) {
 }
 
 /* 注册给 core/app.js：切到本页时按需加载 / 对外暴露的动作。 */
-registerView("market", { onShow: loadMarket });
+/* 「抓大盘快照」（+ 可选同时荐股）按钮在工具栏里：只绑一次，别在每次渲染时重复绑 */
+function bindPanButton() {
+  const btn = $("#btn-pan-run");
+  if (!btn || btn.dataset.bound === "1") return;
+  btn.dataset.bound = "1";
+  btn.addEventListener("click", runPanJob);
+}
+
+
+registerView("market", { onShow: () => { bindPanButton(); return loadMarket(); } });

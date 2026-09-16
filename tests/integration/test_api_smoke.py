@@ -18,7 +18,7 @@ GET_KEYS = {
     "/api/reports": ("items",),
     "/api/history": ("plan_log", "reports"),
     "/api/symbols": ("items",),
-    "/api/market": ("pan", "stock3d"),
+    "/api/market": ("pan", "stock3d", "荐股四档"),
     "/api/market/forecast": ("forecast", "路径", "mtime"),
     "/api/trash": ("items", "目录", "过期天数", "上次清理"),
     "/api/pick": ("json路径", "md", "json", "mtime"),
@@ -153,6 +153,20 @@ class TestApiSmoke(unittest.TestCase):
             card = body["持仓"][0]
             for field in ("成本价", "持仓市值_元", "浮动盈亏_元", "可用股数_可卖"):
                 self.assertIn(field, card)
+
+    def test_market_style_picks(self):
+        """批注 5：大盘快照页的四档打法推荐——固定四行，档位齐全，行结构完整（不联网）。"""
+        status, body = self.server.get("/api/market")
+        self.assertEqual(status, 200, body)
+        block = body["荐股四档"]
+        self.assertEqual([r["打法"] for r in block["行"]], ["超短线", "短线", "中线", "长线"])
+        self.assertTrue(block["口径"])
+        for row in block["行"]:
+            if row["行"] is None:
+                self.assertTrue(row["说明"], "没有该档推荐时要写明原因")
+                continue
+            for field in ("代码", "名称", "打法", "模型分", "机械分", "评级", "理由"):
+                self.assertIn(field, row["行"])
 
     def test_overview_pick_rank(self):
         """总控台荐股榜：结构完整、按模型评分降序；没有产物也要能读（不联网、不写盘）。"""

@@ -7,6 +7,33 @@ import { loadStructKline, sceneCards } from "../ui/kline.js";
 import { mdToHtml, withToc } from "../ui/markdown.js";
 import { basisFor, planTriggerPrice } from "../ui/planprices.js";
 
+/* 批注 2：报告头要显示「用的是哪天的数据」（flow/track 产物写进 数据.事实包日期）。
+ * 拿不到就整条不显示，绝不拿交易日冒充数据日期。 */
+export function dataDateChip(s) {
+  const dd = (s || {})["数据日期"];
+  const items = (dd && dd["项"]) || [];
+  if (!items.length) return "";
+  const pick = name => (items.find(x => x["名称"] === name) || {})["日期"] || "";
+  const k = pick("日K最新交易日");
+  const q = pick("实时报价").split("（")[0];
+  const pan = pick("pan 快照交易日");
+  const s3 = pick("stock3d 快照");
+  const short = [k ? "日K " + k : "", q ? "报价 " + q : ""].filter(Boolean).join(" · ");
+  const full = items.map(x => x["名称"] + " " + x["日期"]).join(" ｜ ");
+  return '<span class="chip accent" id="rep-data-date" title="' + esc(full) + '">数据日期 ' +
+    esc(short || (pan || s3 || "见提示")) + "</span>";
+}
+
+
+/* 批注 1：复核跳过的原因要写在标签上（默认就是没勾复核档）。 */
+export function reviewChip(s) {
+  s = s || {};
+  if (s["复核模型"]) return chip("复核 " + s["复核模型"], s["复核ok"] ? "" : "warn");
+  const why = String(s["复核跳过原因"] || "").trim();
+  return '<span class="chip flat" title="' + esc(why || "本次没有复核结果") +
+    '">复核 已跳过' + (why ? " ⓘ" : "") + "</span>";
+}
+
 export async function refreshReports() {
   const res = await api("/api/reports");
   State.reports = res.items || [];
@@ -129,9 +156,10 @@ export function renderStruct(b) {
     chip((j.phase || "?") + " · " + (j.trade_date || ""), "accent") +
     chip("交易日 " + (j.trade_date || "—")) +
     chip("生成 " + (j.generated_at || "—")) +
+    dataDateChip(s) +
     chip("profile " + ((j.profile || {})["名称"] || "—"), "flat") +
     chip("研判 " + (s["研判模型"] || "—"), s["研判ok"] ? "" : "bad") +
-    (s["复核模型"] ? chip("复核 " + s["复核模型"], s["复核ok"] ? "" : "warn") : chip("复核 已跳过", "flat")) +
+    reviewChip(s) +
     (j["账户余额"] ? chip("余额 " + fmtMoney((j["账户余额"] || {})["余额"]) + " " + ((j["账户余额"] || {})["币种"] || "")) : "") +
     "</div>" +
     '<div class="rep-hero">' +
@@ -191,8 +219,11 @@ export function renderStruct(b) {
 
   /* --- 计划 --- */
   const allEntries = Array.isArray(plan["计划"]) ? plan["计划"] : [];
-  const entries = allEntries.filter(e => !planIsNoop(e["动作"]));
-  const noopCount = allEntries.length - entries.length;
+  /* 批注 4：作废的条目不进主表（也不上 K 线），挪到下方一个默认收起的表里并写作废理由 */
+  const voided = allEntries.filter(e => e && e["作废"]);
+  const live = allEntries.filter(e => !(e && e["作废"]));
+  const entries = live.filter(e => !planIsNoop(e["动作"]));
+  const noopCount = live.length - entries.length;
   if (entries.length) {
     let html = '<div class="table-wrap" style="max-height:none"><table class="tbl"><thead><tr>' +
       "<th>优先级</th><th>动作</th><th>触发条件</th><th>触发价（含依据）</th><th class='num'>股数</th>" +
@@ -204,7 +235,7 @@ export function renderStruct(b) {
       const cls = isSell ? "down" : (isBuy ? "up" : "");
       const rng = renderPlanPrices(e["价格区间"], book, e["动作"], s["现价"]);
       html += "<tr>" + "<td>" + (e["优先级"] == null ? "—" : e["优先级"]) + "</td>" +
-        '<td class="' + cls + '"><b>' + esc(act || "—") + "</b>" + (e["作废"] ? ' <span class="badge bad">作废</span>' : "") + "</td>" +
+        '<td class="' + cls + '"><b>' + esc(act || "—") + "</b></td>" +
         '<td class="wrap">' + esc(e["触发条件"] || "—") + "</td>" +
         '<td class="mono">' + rng + "</td>" +
         '<td class="num">' + (e["股数"] == null ? "—" : fmt(e["股数"], 0)) + "</td>" +
@@ -224,10 +255,32 @@ export function renderStruct(b) {
         "</div>";
     }
     put("plan", card("交易计划", html));
-  } else if (noopCount) {
+  } else if (noopCount || voided.length) {
     put("plan", card("交易计划",
-      '<div class="muted">这份报告只有观望/持有类条目（已省略），没有需要执行的动作——' +
+      '<div class="muted">这份报告没有可执行的动作（观望/持有类条目已省略' +
+      (voided.length ? "，另有 %d 条已作废" % voided.length : "") + "）——" +
       "加入自选或持仓本身就等于在观望。</div>"));
+  }
+
+  /* 已作废条目：单独一张默认收起的表（含作废理由，一字不改地照抄程序给的原文） */
+  if (voided.length) {
+    let html = '<details class="adv"><summary>已作废的条目（' + voided.length +
+      " 条，默认收起）</summary>" +
+      '<div class="muted" style="margin:6px 0">这些条目被硬约束或确定性规则作废，' +
+      "已经不参与执行，也不会上 K 线；下面保留原文与作废理由，方便你回看为什么砍掉。</div>" +
+      '<div class="table-wrap" style="max-height:none"><table class="tbl"><thead><tr>' +
+      "<th>优先级</th><th>动作</th><th>触发条件</th><th>触发价</th><th class='num'>原股数</th>" +
+      "<th>作废理由</th></tr></thead><tbody>" + voided.map(e => {
+        const act = String(e["动作"] || "");
+        const rng = renderPlanPrices(e["价格区间"], book, e["动作"], s["现价"]);
+        return "<tr>" + "<td>" + (e["优先级"] == null ? "—" : e["优先级"]) + "</td>" +
+          '<td><b class="down">' + esc(act || "—") + "</b></td>" +
+          '<td class="wrap muted">' + esc(e["触发条件"] || "—") + "</td>" +
+          '<td class="mono">' + rng + "</td>" +
+          '<td class="num">' + (e["股数"] == null ? "—" : fmt(e["股数"], 0)) + "</td>" +
+          '<td class="wrap">' + esc(e["作废原因"] || "（程序没有留下理由）") + "</td></tr>";
+      }).join("") + "</tbody></table></div></details>";
+    put("void", card("已作废的条目", html));
   }
 
   /* --- 风险 --- */
@@ -261,6 +314,7 @@ export function renderStruct(b) {
 
   /* --- 复核 --- */
   const rv = j["复核"] || {};
+  const skipWhy = rv["跳过原因"] || rv.error;
   if (rv.called) {
     let html = "";
     if (!rv.ok || !review || !Object.keys(review).length) {
@@ -290,8 +344,11 @@ export function renderStruct(b) {
       }
     }
     put("review", card("复核档质询", html));
-  } else if (rv.error) {
-    put("review", card("复核档质询", '<div class="muted">' + esc(rv.error) + "</div>"));
+  } else if (skipWhy) {
+    put("review", card("复核档质询",
+      '<div class="muted">本次没有复核档结果：' + esc(skipWhy) + "</div>" +
+      '<div class="muted" style="margin-top:6px">复核档是「让另一个模型专挑这份计划的毛病」' +
+      "（质询点 / 理由 / 建议 / 是否推翻结论），会多一次模型调用。</div>"));
   }
 
   /* --- 上次计划复盘 + 数据依赖 --- */
@@ -320,6 +377,11 @@ export function renderStruct(b) {
   });
   mhtml += "</tbody></table></div>";
   const secs = (j["事实包"] || {})["章节"] || [];
+  /* 批注 2：把「各来源数据是哪天的」逐条写进运行元信息（鼠标停在头部标签也能看全） */
+  const ddItems = ((dd["事实包日期"] || {})["项"] || []);
+  if (ddItems.length) {
+    ddItems.forEach(x => meta.push(["数据日期 · " + x["名称"], x["日期"], ""]));
+  }
   if (secs.length) {
     mhtml += '<div style="margin-top:12px" class="cards-3">' + secs.map(x =>
       '<div class="mini-card"><div class="k muted">' + esc(x["标题"]) + '</div><div class="mono">' +
@@ -342,7 +404,7 @@ export function renderStruct(b) {
   put("meta", card("运行元信息", mhtml));
 
   /* 卡片顺序：K 线与关键价位、交易计划、关键价位明细 置顶，其余按原优先级排在后面 */
-  return [slots.hero, slots.kline, slots.plan, slots.levels, slots.plancheck, slots.scene,
+  return [slots.hero, slots.kline, slots.plan, slots.void, slots.levels, slots.plancheck, slots.scene,
           slots.risk, slots.check, slots.review, slots.prev, slots.meta]
     .filter(Boolean).join("");
 }
