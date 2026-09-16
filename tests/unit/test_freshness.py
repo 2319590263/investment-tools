@@ -58,6 +58,19 @@ class TestFreshness(unittest.TestCase):
         self.assertTrue(os.path.exists(new), "新鲜快照不能被删")
         self.assertTrue(os.path.exists(os.path.join(self.data, "pan", "state", "calendar.json")),
                         "交易日历不能删")
+
+    def test_stock3d_json_files_are_purged(self):
+        """data/stock3d_<日期>.json（文件型快照）也要按同一口径清掉——老实现只认目录。"""
+        old = self.mk("stock3d_20200103.json", "{}")
+        fresh = self.mk("stock3d_29990102.json", "{}")          # 未来日期：不删
+        other = self.mk("stock3d_notes.txt", "x")               # 不是快照命名：不动
+        res = self.fresh.purge_stale(force=True)
+        gone = [os.path.basename(x["路径"]) for x in res["删除"]]
+        self.assertEqual(gone, ["stock3d_20200103.json"])
+        self.assertEqual([x["类型"] for x in res["删除"]], ["stock3d文件"])
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.exists(fresh))
+        self.assertTrue(os.path.exists(other))
         stale = os.path.join(self.tmp, "trash", "stale")
         self.assertFalse(os.path.isdir(stale) and os.listdir(stale),
                          "过期快照不进回收站（用户明确要求）")

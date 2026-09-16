@@ -49,6 +49,10 @@ def _day_of(name):
     m = re.match(r"^s(\d{8})$", name)
     if m:
         return "stock3d", "%s-%s-%s" % (m.group(1)[:4], m.group(1)[4:6], m.group(1)[6:])
+    # stock3d.py 落的文件型快照 data/stock3d_<YYYYMMDD>.json（老实现只认目录，这批一直没被清过）
+    m = re.match(r"^stock3d_(\d{8})\.json$", name)
+    if m:
+        return "stock3d文件", "%s-%s-%s" % (m.group(1)[:4], m.group(1)[4:6], m.group(1)[6:])
     return None, None
 
 
@@ -99,10 +103,29 @@ def purge_stale(force=False, log=None):
             n += 1
         return n
 
+    def scan_files(parent, kinds, tag_prefix):
+        """文件型快照（data/stock3d_<日期>.json）：与目录型同一口径，过期直接删。"""
+        if not os.path.isdir(parent):
+            return 0
+        n = 0
+        for name in sorted(os.listdir(parent)):
+            path = os.path.join(parent, name)
+            if not os.path.isfile(path):
+                continue
+            kind, day = _day_of(name)
+            if kind not in kinds or day is None or day >= trade_day:
+                continue
+            hit = _remove(path, tag_prefix, log)
+            if hit:
+                deleted.append(hit)
+            n += 1
+        return n
+
     checked = 0
     checked += scan(os.path.join(DATA_DIR, "pan"), {"day"}, "pan")
     checked += scan(os.path.join(DATA_DIR, "pan", "state"), {"day"}, "panstate")
     checked += scan(DATA_DIR, {"stock3d"}, "stock3d")
+    checked += scan_files(DATA_DIR, {"stock3d文件"}, "stock3d文件")
 
     legacy = []
     if os.path.isdir(STALE_DIR):
