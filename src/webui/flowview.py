@@ -10,6 +10,7 @@ from . import flow
 from . import track
 from .paths import aiplan, num, rel
 from .plancheck import session_of
+from .planlines import report_levels
 from .track import quote_brief
 from .flowbook import resolve_name
 
@@ -48,6 +49,23 @@ def _plan_rows(node):
     return rows or None
 
 
+def plan_levels(node):
+    """这只标的的计划线（买点 / 减仓 / 止损 / 目标…）：同样以**产物**为准。
+
+    流 JSON 里存的是算计划当时的那份快照，口径升级（比如「作废条目不算价位」）后不会自动跟着变，
+    所以每次读的时候用 planlines.report_levels 重算一遍（它按 mtime 缓存，不额外读盘）。
+    """
+    path = ((node.get("计划") or {}).get("产物路径"))
+    if path:
+        try:
+            lv = report_levels(path)
+        except Exception:              # noqa: BLE001  产物坏了退回快照
+            lv = None
+        if lv:
+            return lv
+    return (node.get("计划") or {}).get("关键价位") or {}
+
+
 def target_card(flow_doc, node, fresh=None, quote_map=None):
     """一只标的的卡片数据（纯展示，不改文件）。名称按「行情 → 名称簿 → 存的 → 代码」解析。"""
     pnl = node.get("盈亏") or {}
@@ -69,7 +87,7 @@ def target_card(flow_doc, node, fresh=None, quote_map=None):
                  "打法": plan.get("打法") or node.get("打法"),
                  "方向": plan.get("方向"), "置信度": plan.get("置信度"),
                  "一句话结论": plan.get("一句话结论"), "错误": plan.get("错误"),
-                 "关键价位": plan.get("关键价位") or {}, "条目": plan.get("条目") or []},
+                 "关键价位": plan_levels(node), "条目": plan.get("条目") or []},
         # 机械打分（量化底座）+ 硬约束 + 校正记录：与计划产物同一份
         "机械打分": plan.get("机械打分"), "硬约束": plan.get("硬约束"),
         "约束校正": plan.get("约束校正") or [], "约束提示": plan.get("约束提示") or [],
@@ -174,7 +192,7 @@ def lots_of(node):
                 break
     except Exception:            # noqa: BLE001  持仓文件坏了不该拖垮详情页
         hold = {}
-    levels = (node.get("计划") or {}).get("关键价位") or {}
+    levels = plan_levels(node)
     buy = (levels or {}).get("买点") or {}
     sell = (levels or {}).get("减仓") or {}
     return {"买点": lots_text(buy.get("股数")), "减仓": lots_text(sell.get("股数")),
@@ -214,7 +232,7 @@ def detail(fid, quote_map=None, refresh=False, today=None, code=None):
             "事件": list(reversed(node.get("事件") or []))[:80],
             "体检": node.get("体检") or [],
             "计划": plan, "计划条目": items,
-            "关键价位": plan.get("关键价位") or {},
+            "关键价位": plan_levels(node),
             # 机械打分（量化底座）+ 硬约束 + 校正记录：与产物同一份（卡片上就有）
             "机械打分": card.get("机械打分"), "硬约束": card.get("硬约束"),
             "约束校正": card.get("约束校正") or [], "约束提示": card.get("约束提示") or [],
@@ -273,7 +291,9 @@ def minutes(fid, code, refresh=False, mode="minute"):
         "打法": node.get("打法") or flow.DEFAULT_STYLE, "模式": "day" if day else "minute",
         "分时": minute, "分时日期": str(session_of()["现在"])[:10],
         "报价": q, "昨收": q.get("昨收"),
-        "关键价位": ((node.get("计划") or {}).get("关键价位")) or {},
+        "关键价位": plan_levels(node),
+        "作废价位": [v for row in (_plan_rows(node) or []) if row.get("作废")
+                 for v in (num(row.get("精确价")),) if v is not None],
         "成交": fills, "提示": hints,
         "口径": "分时=腾讯当日分钟线（60 秒缓存）｜报价=东财批量（5 秒缓存）"
                 "｜买卖线=交易计划的操作价位（买点/减仓/止损/止盈点）",

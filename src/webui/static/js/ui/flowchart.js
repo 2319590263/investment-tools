@@ -17,16 +17,22 @@ export const MINUTE_H = 190;      // 分时图高度
 export const DAY_H = 300;         // 日K 高度（比行高低一点也看不清结构，单独加高）
 export const DAY_BARS = [120, 250];
 
-/* 计划的操作价位线（同价合并成一条，标签用「·」拼起来）。 */
-export function flowLines(levels, price) {
+/* 计划的操作价位线（同价合并成一条，标签用「·」拼起来）。
+ * voided = 被作废的计划条目涉及的价位（批注 4：作废的价位不画在图上）。 */
+export function flowLines(levels, price, voided) {
   const lv = levels || {};
   const out = [];
-  const add = (v, label, color) => { if (num(v) !== null) out.push({ v: num(v), label, color }); };
+  const dead = (voided || []).map(num).filter(x => x !== null);
+  const isDead = v => dead.some(x => Math.abs(x - v) <= Math.max(v * 0.0005, 0.002));
+  const add = (v, label, color) => {
+    const n = num(v);
+    if (n !== null && !isDead(n)) out.push({ v: n, label, color });
+  };
   add(precisePrice(lv["买点"], price), "买点", C.buy);
   add(precisePrice(lv["减仓"], price), "减仓", C.sell);
   add(num(lv["止损"]), "止损", C.sell);
   const goal = nearestTarget(lv["目标"], price);
-  if (goal) out.push({ v: goal.v, label: "止盈点", color: C.target });
+  if (goal && !isDead(goal.v)) out.push({ v: goal.v, label: "止盈点", color: C.target });
   const merged = [];                       // 同价（±0.1%）合并：买点与止盈点撞在一起时只画一条
   out.forEach(x => {
     const hit = merged.find(m => Math.abs(m.v - x.v) <= Math.max(m.v * 0.001, 0.005));
@@ -59,7 +65,8 @@ export function drawFlowMinutes(canvas, data) {
   const plotW = Math.max(60, w - padL - padR), plotH = Math.max(40, h - padT - padB);
   // 纵轴范围 = 分时价 + 计划的操作价位线（均价/昨收/成交点都不画）
   const points = prices.filter(v => v !== null);
-  const planLines = flowLines(data["关键价位"], num((data["报价"] || {})["价格"]));
+  const planLines = flowLines(data["关键价位"], num((data["报价"] || {})["价格"]),
+    data["作废价位"]);
   planLines.forEach(l => points.push(l.v));
   if (!points.length) {
     ctx.fillStyle = C.text;
@@ -149,7 +156,8 @@ export function drawFlowDays(canvas, data) {
   const all = ((data["日K"] || {})["bars"] || []).filter(b => b && num(b.close) != null);
   const want = Math.max(20, Math.min(250, num(canvas.dataset.dayBars) || DAY_BARS[0]));
   const bars = all.slice(-want);
-  const planLines = flowLines(data["关键价位"], num((data["报价"] || {})["价格"]));
+  const planLines = flowLines(data["关键价位"], num((data["报价"] || {})["价格"]),
+    data["作废价位"]);
   const padL = 52, padR = 96, padT = 16, padB = 22;
   const plotW = Math.max(60, w - padL - padR), plotH = Math.max(40, h - padT - padB);
   if (!bars.length) {

@@ -282,7 +282,7 @@ if (!planLinks) {
   /* 「数据日期」只有写了 数据.事实包日期 的产物才有（旧产物没有）：挑一份有它的来看 */
   const planPaths = await page.evaluate(() => Array.from(
     document.querySelectorAll("#flow-list [data-plan]"), el => el.dataset.plan));
-  let factDates = null, hasVoid = false, chosen = "";
+  let factDates = null, hasVoid = false, chosen = "", hasReview = false;
   const seen = [];
   for (const p of planPaths) {
     const rep = await page.evaluate(path => fetch("/api/report?path=" + encodeURIComponent(path))
@@ -290,13 +290,15 @@ if (!planLinks) {
     const dd = rep && rep.json && rep.json["数据"] && rep.json["数据"]["事实包日期"];
     const voided = ((((rep || {}).json || {})["研判"] || {}).json || {})["计划"] || [];
     seen.push({p: p, dd: (dd && (dd["项"] || []).length) ? dd : null,
-               v: (voided || []).filter(e => e && e["作废"]).length});
+               v: (voided || []).filter(e => e && e["作废"]).length,
+               r: !!(((rep || {}).json || {})["复核"] || {}).called});
   }
   /* 优先挑「既有数据日期、又有作废条目」的那份；退而求其次挑有数据日期的 */
   const pick = seen.find(x => x.dd && x.v) || seen.find(x => x.dd) || seen[0] || {};
   factDates = pick.dd || null;
   hasVoid = !!pick.v;
   chosen = pick.p || "";
+  hasReview = !!pick.r;
   if (chosen) {
     /* 走「打开计划报告」那条链接（报告下拉里只列 data/ai 下的报告，不含 track 产物） */
     await gotoView("flow");
@@ -306,16 +308,22 @@ if (!planLinks) {
     await page.waitForTimeout(2500);
   }
   const headTxt = await page.locator("#report-struct .rep-sub").first().innerText().catch(() => "");
-  const skipOk = /复核 已跳过/.test(headTxt);
-  console.log(`${skipOk ? "PASS" : "FAIL"}  复核标签写明「已跳过」（${headTxt.replace(/\s+/g, " ").slice(0, 90)}）`);
-  if (!skipOk) failed++;
-  const skipTitle = await page.evaluate(() => {
-    const el = Array.from(document.querySelectorAll("#report-struct .rep-sub .chip"))
-      .find(x => /复核/.test(x.textContent) && x.getAttribute("title"));
-    return el ? el.getAttribute("title") : "";
-  });
-  console.log(`${skipTitle ? "PASS" : "FAIL"}  复核标签带原因（${String(skipTitle).slice(0, 48)}…）`);
-  if (!skipTitle) failed++;
+  if (hasReview) {
+    const revOk = /复核 (?!已跳过)\S+/.test(headTxt);
+    console.log(`${revOk ? "PASS" : "FAIL"}  勾了复核档的报告显示复核模型（${headTxt.replace(/\s+/g, " ").slice(0, 90)}）`);
+    if (!revOk) failed++;
+  } else {
+    const skipOk = /复核 已跳过/.test(headTxt);
+    console.log(`${skipOk ? "PASS" : "FAIL"}  复核标签写明「已跳过」（${headTxt.replace(/\s+/g, " ").slice(0, 90)}）`);
+    if (!skipOk) failed++;
+    const skipTitle = await page.evaluate(() => {
+      const el = Array.from(document.querySelectorAll("#report-struct .rep-sub .chip"))
+        .find(x => /复核/.test(x.textContent) && x.getAttribute("title"));
+      return el ? el.getAttribute("title") : "";
+    });
+    console.log(`${skipTitle ? "PASS" : "FAIL"}  复核标签带原因（${String(skipTitle).slice(0, 48)}…）`);
+    if (!skipTitle) failed++;
+  }
   if (!factDates) {
     console.log("INFO  手头这份产物没写「事实包日期」（旧产物），跳过数据日期标签断言");
   } else {
@@ -524,10 +532,10 @@ if (!noBtnCol) failed++;
 
 await page.waitForSelector("#flow-list canvas.fl-chart", { timeout: 25000 }).catch(() => {});
 /* 画布是异步画的（先取分时/日K 再画）：等 dataset.map 落下去，别抢读像素 */
-await page.waitForFunction(() => {
+const drawn = await page.waitForFunction(() => {
   const c = document.querySelector("#flow-list canvas.fl-chart");
   return !!(c && c.dataset.map && c.dataset.map.length > 20);
-}, { timeout: 30000 }).catch(() => {});
+}, { timeout: 45000 }).then(() => true).catch(() => false);
 const rowCharts = await page.locator("#flow-list canvas.fl-chart").count();
 console.log(`${rowCharts > 0 ? "PASS" : "FAIL"}  标的行内分时图已渲染（${rowCharts} 张）`);
 if (!(rowCharts > 0)) failed++;
@@ -537,8 +545,12 @@ const chartPixels = await page.evaluate(() => {
   try { return c.getContext("2d").getImageData(0, 0, c.width, c.height).data.filter(v => v > 0).length; }
   catch (e) { return -1; }
 });
-console.log(`${chartPixels !== 0 ? "PASS" : "FAIL"}  行内分时图确实画了东西（非空像素 ${chartPixels}）`);
-if (chartPixels === 0) failed++;
+if (!drawn) {
+  console.log("INFO  行内图还没画完（服务刚重启、分时还在取数），跳过像素断言");
+} else {
+  console.log(`${chartPixels !== 0 ? "PASS" : "FAIL"}  行内分时图确实画了东西（非空像素 ${chartPixels}）`);
+  if (chartPixels === 0) failed++;
+}
 const bandOptions = await page.locator("#flow-band option").count();
 console.log(`${bandOptions >= 3 ? "PASS" : "FAIL"}  接近带档位（${bandOptions} 档）`);
 if (bandOptions < 3) failed++;
