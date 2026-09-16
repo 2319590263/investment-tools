@@ -259,6 +259,28 @@ export function closedLine(c) {
 }
 
 
+/* 「计划与体检」卡的选流 / 选标的（批注 2：点「计算计划」不能只说「先选一条流」，
+ * 这里直接给下拉；点过「详情」会自动跟着选中那只标的）。 */
+export function flowPickHtml(cards, selFlow, selCode) {
+  const active = (cards || []).filter(c => c["状态"] === "进行中");
+  if (!active.length) {
+    return '<span class="muted">还没有进行中的交易流：先在下面「开新流」并加标的，再回来算计划 / 体检。</span>';
+  }
+  const cur = active.find(c => c["流编号"] === selFlow) || active[0];
+  const flowOpts = active.map(c => '<option value="' + esc(c["流编号"]) + '"' +
+    (c["流编号"] === cur["流编号"] ? " selected" : "") + ">" + esc(c["流编号"]) +
+    "（" + (c["标的"] || []).length + " 只标的）</option>").join("");
+  const codeOpts = '<option value="">全部标的（「计算计划」会逐只算）</option>' +
+    (cur["标的"] || []).map(t => '<option value="' + esc(t["代码"]) + '"' +
+      (t["代码"] === selCode ? " selected" : "") + ">" + esc(t["代码"]) + " " +
+      esc(t["名称"] || "") + "（" + esc(t["打法"] || "—") + "）</option>").join("");
+  return '<span class="muted">选流与标的</span>' +
+    '<select id="flow-pick-flow" class="inline-select">' + flowOpts + "</select>" +
+    '<select id="flow-pick-code" class="inline-select">' + codeOpts + "</select>" +
+    '<span class="muted">计算计划：流内逐只跑（每只 1 次模型调用）；体检：必须先选一只标的</span>';
+}
+
+
 export function flowFormHtml(hint) {
   return '<div class="row" style="gap:8px;flex-wrap:wrap;align-items:flex-end">' +
     '<div class="field" style="margin:0;flex:0 0 150px"><label>流资金（元）</label>' +

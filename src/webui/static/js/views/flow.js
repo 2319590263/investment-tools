@@ -12,13 +12,14 @@ import { openReport, registerView } from "../core/app.js";
 import { $, $$, esc, freshNote, toast } from "../core/util.js";
 import { closeModal, confirmModal, openModal } from "../ui/modal.js";
 import { closedLine, flowCardsHtml, flowDetailHtml, flowFormHtml, paramsFormHtml,
-         targetFormHtml } from "../ui/flowcards.js";
+         flowPickHtml, targetFormHtml } from "../ui/flowcards.js";
 import { bindFlowChart, drawFlowDays, drawFlowMinutes, DAY_BARS } from "../ui/flowchart.js";
 
 export const Flow = {list: null, detail: null, fid: null, settings: null, day: "",
                     jobId: null, timer: null, from: 0, running: false, runningKind: "",
                     poller: null, lastJobResult: null,
-                    chartMode: {}, dayBars: {}};      // 行内图：每只标的记住「分时 / 日K」与根数
+                    chartMode: {}, dayBars: {},       // 行内图：每只标的记住「分时 / 日K」与根数
+                    pickFlow: "", pickCode: ""};      // 「计划与体检」卡选中的流与标的
 
 
 
@@ -145,11 +146,34 @@ export function renderFlows() {
   }
   setBadge(cards, pending);
   drawRowCharts(cards);
+  renderPick();
   if (Flow.settings && Flow.settings["打开页面自动补跑"]) {
     pending.forEach(x => startFlowJob("flow_plan", {流编号: x["流编号"], 代码: x["代码"]}));
   }
   renderForm();
 }
+
+/* 「计划与体检」卡的选流 / 选标的（批注 2）：下拉跟着流列表刷新，选了就记住。 */
+export function renderPick() {
+  const box = $("#flow-pick");
+  if (!box) return;
+  const cards = ((Flow.list || {})["流"]) || [];
+  if (!cards.some(c => c["流编号"] === Flow.pickFlow && c["状态"] === "进行中")) {
+    const first = cards.find(c => c["状态"] === "进行中");
+    Flow.pickFlow = first ? first["流编号"] : "";
+    Flow.pickCode = "";
+  }
+  box.innerHTML = flowPickHtml(cards, Flow.pickFlow, Flow.pickCode);
+  const flowSel = $("#flow-pick-flow");
+  const codeSel = $("#flow-pick-code");
+  if (flowSel) flowSel.addEventListener("change", () => {
+    Flow.pickFlow = flowSel.value;
+    Flow.pickCode = "";
+    renderPick();
+  });
+  if (codeSel) codeSel.addEventListener("change", () => { Flow.pickCode = codeSel.value; });
+}
+
 
 /* 每只标的行下面那张分时图：进入/刷新页面时按顺序补画（服务端有 60 秒缓存 + 限速）。 */
 export function drawRowCharts(cards) {
@@ -345,6 +369,10 @@ export async function openFlowDetail(fid, refresh, code) {
     $("#flow-detail-head").textContent = fid + " · " + (d["标的"] || []).length +
       " 只标的 ｜ 当前 " + ((curTarget() || {})["名称"] || "—");
     renderFlowChart(fid, Flow.code, false);
+    /* 看哪只就默认算哪只（批注 2：点「详情」后上面的「计算计划 / 体检」直接可用） */
+    Flow.pickFlow = fid;
+    Flow.pickCode = Flow.code || "";
+    renderPick();
   } catch (e) {
     $("#flow-detail").innerHTML = '<div class="fail">读取详情失败：' + esc(e.message) + "</div>";
   }
@@ -736,13 +764,19 @@ export function initFlowView() {
   if (stop) stop.addEventListener("click", stopFlowJob);
   const plan = $("#btn-flow-plan");
   if (plan) plan.addEventListener("click", () => {
-    if (Flow.fid) startFlowJob("flow_plan", {流编号: Flow.fid, 代码: Flow.code ? [Flow.code] : []});
-    else toast("先选一条流", "bad");
+    const fid = Flow.pickFlow;
+    if (!fid) { toast("还没有进行中的交易流：先开一条流再加标的", "bad"); return; }
+    startFlowJob("flow_plan", {流编号: fid, 代码: Flow.pickCode ? [Flow.pickCode] : []});
   });
   const check = $("#btn-flow-check");
   if (check) check.addEventListener("click", () => {
-    if (Flow.fid) openCheckDialog(Flow.fid, Flow.code);
-    else toast("先选一条流", "bad");
+    const fid = Flow.pickFlow;
+    if (!fid) { toast("还没有进行中的交易流：先开一条流再加标的", "bad"); return; }
+    if (!Flow.pickCode) {
+      toast("体检要指明一只标的：在上面「选流与标的」里挑一只（体检是逐只排查意外）", "warn");
+      return;
+    }
+    openCheckDialog(fid, Flow.pickCode);
   });
 }
 

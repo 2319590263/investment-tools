@@ -11,6 +11,7 @@ from . import track
 from .paths import aiplan, num, rel
 from .plancheck import session_of
 from .track import quote_brief
+from .flowbook import resolve_name
 
 CONSOLE_ROWS = 12               # 总控台最多展示多少行（一行 = 一只标的）
 CLOSED_ROWS = 20                # 页面「已结束」区最多展示多少条
@@ -47,13 +48,15 @@ def _plan_rows(node):
     return rows or None
 
 
-def target_card(flow_doc, node, fresh=None):
-    """一只标的的卡片数据（纯展示，不改文件）。"""
+def target_card(flow_doc, node, fresh=None, quote_map=None):
+    """一只标的的卡片数据（纯展示，不改文件）。名称按「行情 → 名称簿 → 存的 → 代码」解析。"""
     pnl = node.get("盈亏") or {}
     plan = node.get("计划") or {}
     checks = node.get("体检") or []
     return {
-        "流编号": flow_doc.get("流编号"), "代码": node.get("代码"), "名称": node.get("名称"),
+        "流编号": flow_doc.get("流编号"), "代码": node.get("代码"),
+        "名称": resolve_name(node, quote_map),
+        "存的名字": node.get("名称"),
         "是否ETF": node.get("是否ETF"), "打法": node.get("打法") or flow.DEFAULT_STYLE,
         "分配资金": node.get("分配资金"), "参数": node.get("参数"),
         "状态": node.get("状态"), "加入日": node.get("加入日"), "加入时间": node.get("加入时间"),
@@ -83,7 +86,7 @@ def target_card(flow_doc, node, fresh=None):
     }
 
 
-def flow_card(doc, fresh_map=None):
+def flow_card(doc, fresh_map=None, quote_map=None):
     """一条流的卡片：流参数 + 汇总 + 每只标的的卡片。"""
     params = doc.get("参数") or {}
     return {
@@ -92,7 +95,8 @@ def flow_card(doc, fresh_map=None):
         "结束时间": doc.get("结束时间"), "结束原因": doc.get("结束原因"),
         "参数": params,
         "汇总": doc.get("汇总") or flow.aggregate(doc),
-        "标的": [target_card(doc, n, (fresh_map or {}).get(aiplan.code6(n.get("代码") or "")))
+        "标的": [target_card(doc, n, (fresh_map or {}).get(aiplan.code6(n.get("代码") or "")),
+                             quote_map=quote_map)
                  for n in flow.targets(doc)],
         "事件": list(reversed(doc.get("事件") or []))[:20],
     }
@@ -125,7 +129,7 @@ def check_pass(active, quote_map=None, refresh=False, today=None):
         if changed:
             flow.aggregate(doc)
             dirty.append(doc)
-        cards.append(flow_card(doc, fresh_map))
+        cards.append(flow_card(doc, fresh_map, quote_map=quote_map))
     if fresh_all:
         alerts_store.append(fresh_all)
     for doc in dirty:
@@ -189,7 +193,7 @@ def detail(fid, quote_map=None, refresh=False, today=None, code=None):
         check_pass([doc], quote_map, refresh=refresh, today=today)
     blocks = []
     for node in flow.targets(doc):
-        card = target_card(doc, node)
+        card = target_card(doc, node, quote_map=quote_map)
         from .planlines import meaningful_failure, trigger_price
         live = (node.get("盈亏") or {}).get("现价")
         # 计划条目以**产物**为准（流里存的只是快照）：硬约束做的作废 / 改股数写的是产物
@@ -220,7 +224,7 @@ def detail(fid, quote_map=None, refresh=False, today=None, code=None):
             "报价": (quote_map or {}).get(aiplan.code6(node.get("代码") or "")),
         })
     selected = aiplan.code6(code or "") or (blocks[0]["代码"] if blocks else None)
-    return {"流": doc, "卡": flow_card(doc), "标的": blocks, "选中": selected,
+    return {"流": doc, "卡": flow_card(doc, quote_map=quote_map), "标的": blocks, "选中": selected,
             "汇总": doc.get("汇总") or flow.aggregate(doc), "设置": flow.settings(),
             "打法口径": flow.STYLE_HINT,
             "事件": list(reversed(doc.get("事件") or []))[:40]}, None
@@ -265,7 +269,7 @@ def minutes(fid, code, refresh=False, mode="minute"):
                       "方向": f.get("方向"), "价格": price, "数量": num(f.get("数量")),
                       "来源": f.get("来源"), "备注": f.get("备注")})
     out = {
-        "流编号": fid, "代码": c6, "名称": node.get("名称") or c6,
+        "流编号": fid, "代码": c6, "名称": resolve_name(node, {c6: q}),
         "打法": node.get("打法") or flow.DEFAULT_STYLE, "模式": "day" if day else "minute",
         "分时": minute, "分时日期": str(session_of()["现在"])[:10],
         "报价": q, "昨收": q.get("昨收"),

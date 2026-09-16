@@ -16,11 +16,13 @@
 import json
 import os
 import re
+import time
 from datetime import datetime
 
 from .paths import FLOW_SETTINGS, LEDGER_PATH, aiplan, atomic_write, num, now_str, rel
 from .plancheck import session_of
 from .planlines import report_levels
+from .store import load_holdings_bundle, load_watchlist
 
 ACTIVE_STATE = "进行中"
 STATES = ("进行中", "已达标", "已止损", "未达标清仓", "已结束", "已终止")
@@ -81,6 +83,45 @@ def save_settings(patch):
 
 def _f(v, nd=2):
     return "—" if v is None else (("%." + str(int(nd)) + "f") % v)
+
+
+# ---------------------------------------------------------------------------
+# 标的名称（批注 1）：流里存的名字可能为空、也可能是开流时随手填的代码
+# ---------------------------------------------------------------------------
+
+NAME_TTL = 30.0                 # 名称簿缓存（持仓 / 自选 + stock3d 快照，都是本地文件）
+_NAME = {"ts": 0.0, "book": {}}
+
+
+def name_book():
+    """{6 位代码: 名称}：持仓文件 + 自选股（自选股列表自带 stock3d 快照里的名字）。"""
+    now = time.time()
+    if _NAME["book"] and now - _NAME["ts"] <= NAME_TTL:
+        return _NAME["book"]
+    book = {}
+    try:
+        rows = list(load_holdings_bundle().get("持仓") or []) + list(load_watchlist())
+    except Exception:                  # noqa: BLE001  读不到名单不该影响页面
+        rows = []
+    for row in rows:
+        c6 = aiplan.code6(row.get("代码") or "")
+        name = str(row.get("名称") or "").strip()
+        if c6 and name and aiplan.code6(name) != c6:
+            book.setdefault(c6, name)
+    _NAME["ts"], _NAME["book"] = now, book
+    return book
+
+
+def resolve_name(node, quote_map=None, book=None):
+    """显示用的标的名称：实时行情 → 名称簿 → 流里存的名字（是代码就不算）→ 代码。"""
+    c6 = aiplan.code6((node or {}).get("代码") or "")
+    quote = ((quote_map or {}).get(c6) or {}) if c6 else {}
+    for cand in (quote.get("名称"), (book if book is not None else name_book()).get(c6),
+                 (node or {}).get("名称")):
+        text = str(cand or "").strip()
+        if text and aiplan.code6(text) != c6:
+            return text
+    return c6 or str((node or {}).get("名称") or "")
 
 
 def is_etf(node):

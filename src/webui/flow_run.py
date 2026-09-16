@@ -8,6 +8,7 @@
 """
 
 import os
+import re
 import subprocess
 
 from . import background
@@ -80,6 +81,38 @@ CHECK_PROMPT = (
 
 def _num(v, nd=2):
     return "—" if v is None else (("%." + str(int(nd)) + "f") % v)
+
+
+def _s3_date(path):
+    """stock3d 快照文件名 → 数据日期（stock3d_YYYYMMDD.json）。"""
+    m = re.search(r"stock3d_(\d{8})\.json$", os.path.basename(str(path or "")))
+    if not m:
+        return None
+    d = m.group(1)
+    return "%s-%s-%s" % (d[:4], d[4:6], d[6:])
+
+
+def fact_dates(pan_doc=None, pan_path=None, s3_path=None, score=None, brief=None,
+               apply=None):
+    """事实包用到的数据各是哪天的（批注 3：日志与产物都要写清楚，别拿旧数据当新数据）。
+
+    返回 {"项": [...], "文本": "..."}；文本形如「实时报价 02:14（东财实时行情）｜ 日K 最新 2026-09-16 ｜ …」
+    """
+    brief = brief or {}
+    items = [
+        ("实时报价", "%s（%s）" % (brief.get("时间") or "未取到", brief.get("来源") or "—")),
+        ("日K最新交易日", (score or {}).get("日K最新交易日") or "—"),
+        ("机械打分取数", str((score or {}).get("取数时间") or "—").replace("T", " ")),
+        ("pan 快照交易日", ((pan_doc or {}).get("trade_date")
+                            or (rel(pan_path) if pan_path else None) or "没有快照")),
+        ("stock3d 快照", _s3_date(s3_path) or "没有该标的的快照"),
+    ]
+    if apply:
+        items.append(("计划适用交易日", "%s（%s）" % (apply.get("适用交易日"),
+                                                apply.get("口径"))))
+    return {"项": [{"名称": k, "日期": v} for k, v in items],
+            "文本": " ｜ ".join("%s %s" % (k, v) for k, v in items),
+            "口径": "每项都标明来源时点；缺失的写「没有」，不用别的数据顶替"}
 
 
 def flow_state_lines(doc, node, price=None, source=None, when=None):
@@ -206,7 +239,7 @@ def _plan_one(log, ctl, doc, node, opts):
     """给一只标的生成 / 重算计划：事实包最前面是「交易流状态」（成交与盈亏是权威口径）。"""
     fid = doc.get("流编号")
     c6 = aiplan.code6(node.get("代码") or "")
-    name = node.get("名称") or c6
+    name = flow_store.resolve_name(node) or c6
     style = node.get("打法") or flow_store.DEFAULT_STYLE
     kind = "重算计划" if node.get("计划") else "首份计划"
     apply = track.apply_trade_date()
@@ -225,6 +258,12 @@ def _plan_one(log, ctl, doc, node, opts):
     quote = quote_map.get(c6)
     for h in qhints:
         log("[WARN] %s" % h)
+    # 名称：流里存的是代码（或空）时用真名，并写回流文件（报告标题 / 卡片 / 日志都用它）
+    real_name = flow_store.resolve_name(node, quote_map)
+    if real_name and real_name != node.get("名称"):
+        log("[OK] 标的名称：%s → %s" % (node.get("名称") or "—", real_name))
+        node["名称"] = real_name
+    name = node.get("名称") or c6
     added = flow_store.sync_ledger(node, account=account, log=log)
     if added:
         log("[OK] 交易台账并入 %d 笔成交" % added)
@@ -281,6 +320,8 @@ def _plan_one(log, ctl, doc, node, opts):
     log("    事实包 %s 字符（%d 章节%s）"
         % (fact["字符数"], len(fact["章节"]),
            "，裁剪 " + "、".join(fact["裁剪"]) if fact["裁剪"] else ""))
+    dates = fact_dates(pan_doc, pan_path, s3_path, score, brief, apply)
+    log("[OK] 事实包数据日期：%s" % dates["文本"])
     if ctl.get("cancel"):
         raise RuntimeError("已取消")
     plan_obj, research = track_run.call_plan(log, s, fact["文本"], ctl,
@@ -322,7 +363,8 @@ def _plan_one(log, ctl, doc, node, opts):
                  "pan_sha1": aiplan.sha1_file(pan_path) if pan_path else None,
                  "stock3d_path": rel(s3_path) if s3_path else None,
                  "stock3d_sha1": aiplan.sha1_file(s3_path) if s3_path else None,
-                 "裁剪记录": fact["裁剪"], "降级明细": hints},
+                 "裁剪记录": fact["裁剪"], "降级明细": hints,
+                 "事实包日期": dates},
         "事实包": {"字符数": fact["字符数"], "sha1": aiplan.sha1_text(fact["文本"]),
                    "章节": fact["章节"], "上限": fact["上限"], "说明": fact["说明"]},
         "交易流": {"流编号": fid, "流资金": (doc.get("参数") or {}).get("流资金"),
@@ -649,6 +691,9 @@ def run_check(log, ctl, opts):
     log("    事实包 %s 字符（消息面 %s 条公告 / %s 条快讯）"
         % (len(fact), len(((news.get("notices") or {}).get("items") or [])),
            len(news.get("flash") or [])))
+    log("[OK] 事实包数据日期：%s"
+        % fact_dates(pan_doc, pan_path, s3_path, {"取数时间": s3_date, "技术": tech},
+                     brief, None)["文本"])
     if ctl.get("cancel"):
         raise RuntimeError("已取消")
     result, block = _call_check(log, s, fact, ctl)

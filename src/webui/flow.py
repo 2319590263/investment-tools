@@ -23,7 +23,8 @@ from .flowbook import (BANDS, CHECK_LEVELS, DEFAULT_SETTINGS, INTERVALS,  # noqa
                        add_check, add_fill, alert_items, apply_price, delete_fill,
                        due_alerts, events_append, exec_record, mark_alerted, marks,
                        next_action, plan_stale, plancheck_lots, recompute, save_settings,
-                       set_plan, settings, sync_ledger, trade_fee)
+                       set_plan, settings, sync_ledger, trade_fee,
+                       name_book, resolve_name)
 from .paths import FLOW_DIR, TRASH_DIR, aiplan, atomic_write, num, now_str, rel
 
 FLOW_VERSION = 2
@@ -392,7 +393,9 @@ def add_target(doc, code, name="", style=None, alloc=None, start=None, today=Non
     block, fills = _start_block(start, day, doc.get("流编号") or c6)
     if block is None:
         return None, fills                       # 期初持仓缺成本价
-    node = {"代码": c6, "名称": (name or c6).strip() or c6, "是否ETF": is_etf_code(c6),
+    # 名称：页面上没填就用持仓 / 自选里的真名（批注 1：流里存的是代码时显示不出标的）
+    name = (name or "").strip() or name_book().get(c6) or c6
+    node = {"代码": c6, "名称": name, "是否ETF": is_etf_code(c6),
             "打法": style, "分配资金": round(float(amount), 2), "加入日": day,
             "加入时间": now_str(), "状态": ACTIVE_STATE, "结束时间": None, "结束原因": None,
             "期初": block, "成交": fills, "持仓": {}, "盈亏": {}, "计划": {}, "体检": [],

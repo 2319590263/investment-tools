@@ -351,6 +351,9 @@ def score_one(code, refresh=False, log=None):
         "代码": c6, "名称": row.get("名称") or c6, "行业": ind,
         "原始行": row, "技术": tech, "基本面": fin, "资金": extras,
         "模块": module_totals(score), "机械分": score,
+        # 事实包数据日期（批注 3：页面要把「用的是哪天的数据」打出来）
+        "日K最新交易日": ((bars[-1].get("date") if bars else None)),
+        "日K根数": len(bars), "日K来源": "东财前复权（腾讯兜底）",
         "缺失": score.get("缺失") or [], "否决": veto,
         "否决汇总": mech.veto_summary(), "降级": degrade, "口径提示": hints,
         "口径": "机械分 = 实得 ÷ 可得 × 100（可得上限 %d 分）；阈值照抄《机器打分逻辑.txt》；"

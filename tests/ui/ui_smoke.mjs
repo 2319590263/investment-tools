@@ -339,6 +339,17 @@ if (!(poolRows > 0)) failed++;
 /* ---- 交易流页：盯盘控件 + 流卡区 + 开流表单 + 详情（不点「体检 / 重算」，不打模型） ---- */
 await gotoView("flow");
 await page.waitForSelector("#btn-flow-create", { timeout: 20000 }).catch(() => {});
+/* 批注 1/2：计算计划的选流控件 + 卡片显示标的名称（不是光秃秃的代码） */
+const pickSel = await page.locator("#flow-pick-flow").count();
+const pickCode = await page.locator("#flow-pick-code").count();
+const hasPick = pickSel > 0 && pickCode > 0;
+console.log(`${hasPick ? "PASS" : "FAIL"}  「计划与体检」卡可选流与标的（#flow-pick-flow / #flow-pick-code）`);
+if (!hasPick) failed++;
+if (hasPick) {
+  const pickText = await page.locator("#flow-pick").innerText().catch(() => "");
+  console.log(`${/选流与标的/.test(pickText) ? "PASS" : "FAIL"}  选择控件有说明文案`);
+  if (!/选流与标的/.test(pickText)) failed++;
+}
 for (const sel of ["#flow-list", "#btn-flow-create", "#btn-flow-poll", "#flow-interval",
                    "#flow-band", "#flow-console", "#flow-detail", "#btn-flow-plan",
                    "#btn-flow-check", "#nav-flow-badge",
@@ -381,6 +392,15 @@ if (flowCards > 0) {
   const targetTables = await page.locator("#flow-list .flow-card table.fl-targets").count();
   console.log(`${targetTables >= 1 ? "PASS" : "FAIL"}  流卡片里有标的表`);
   if (targetTables < 1) failed++;
+  /* 批注 1：标的行显示名称（存的是代码时也要解析出真名） */
+  const names = await page.locator("#flow-list .flow-card table.fl-targets tbody tr[data-code] td:first-child b")
+    .allInnerTexts().catch(() => []);
+  const named = names.filter(x => x.trim() && !/^\d{6}$/.test(x.trim()));
+  console.log(`${named.length ? "PASS" : "FAIL"}  标的行显示名称（${names.map(x => x.trim()).join("/")}）`);
+  if (!named.length) failed++;
+  const dt = await page.locator("#flow-list .flow-card table.fl-targets tbody tr[data-code] td:first-child")
+    .first().innerText().catch(() => "");
+  console.log(`${dt.includes("/") || dt.includes("-") ? "PASS" : "FAIL"}  行里带计划/适用交易日摘要`);
 }
 /* 批注 1/2/4：行内分时图 + 按钮已移到图下方 */
 const calcBtns = await page.locator("#flow-list .fl-chart-row [data-act='plan']").allInnerTexts().catch(() => []);
