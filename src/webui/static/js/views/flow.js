@@ -13,11 +13,12 @@ import { $, $$, esc, freshNote, toast } from "../core/util.js";
 import { closeModal, confirmModal, openModal } from "../ui/modal.js";
 import { closedLine, flowCardsHtml, flowDetailHtml, flowFormHtml, paramsFormHtml,
          targetFormHtml } from "../ui/flowcards.js";
-import { bindFlowChart, drawFlowMinutes } from "../ui/flowchart.js";
+import { bindFlowChart, drawFlowDays, drawFlowMinutes, DAY_BARS } from "../ui/flowchart.js";
 
 export const Flow = {list: null, detail: null, fid: null, settings: null, day: "",
                     jobId: null, timer: null, from: 0, running: false, runningKind: "",
-                    poller: null, lastJobResult: null};
+                    poller: null, lastJobResult: null,
+                    chartMode: {}, dayBars: {}};      // 行内图：每只标的记住「分时 / 日K」与根数
 
 
 
@@ -349,33 +350,73 @@ export async function openFlowDetail(fid, refresh, code) {
   }
 }
 
-/* 分时图：流卡片的标的行内 + 详情卡共用这一条渲染路径（一个标的一次请求，60 秒缓存）。 */
-export async function renderFlowChart(fid, code, refresh, root) {
+/* 行内图：流卡片的标的行内 + 详情卡共用这一条渲染路径（一个标的一次请求）。
+ * 分时走 60 秒缓存；日K 走当天磁盘缓存（mode=day）。 */
+export async function renderFlowChart(fid, code, refresh, root, mode) {
   const box = root || $("#flow-detail") || document;
   if (!box || !code) return;
   const canvas = box.querySelector('[data-chart-code="' + code + '"]');
   const note = box.querySelector('[data-chart-note="' + code + '"]');
   if (!canvas) return;
-  if (note) note.textContent = "正在取分时 …";
+  const want = mode || Flow.chartMode[code] || "minute";
+  Flow.chartMode[code] = want;
+  if (!Flow.dayBars[code]) Flow.dayBars[code] = DAY_BARS[0];
+  canvas.dataset.dayBars = String(Flow.dayBars[code]);
+  if (note) note.textContent = want === "day" ? "正在取日K …" : "正在取分时 …";
   try {
     const d = await api("/api/flow/minutes?id=" + encodeURIComponent(fid) +
-      "&code=" + encodeURIComponent(code) + (refresh ? "&refresh=1" : ""));
+      "&code=" + encodeURIComponent(code) + "&mode=" + want +
+      (refresh ? "&refresh=1" : ""));
     /* 买卖点只画在分时对应那一天：优先当天成交；当天没有就用最近一天的成交（非交易日也看得见） */
     const all = d["成交"] || [];
     const days = Array.from(new Set(all.map(f => String(f["日期"] || "")))).sort();
     const day = all.some(f => String(f["日期"] || "") === String(d["分时日期"] || ""))
       ? String(d["分时日期"] || "") : (days[days.length - 1] || "");
     const fills = all.filter(f => String(f["日期"] || "") === day);
-    drawFlowMinutes(canvas, d);
+    if (want === "day") drawFlowDays(canvas, d); else drawFlowMinutes(canvas, d);
     bindFlowChart(canvas);
+    markChartMode(box, code, want);
     if (note) {
-      const bits = [d["口径"] || "", "当日成交 " + fills.length + " 笔"];
+      const bits = [d["口径"] || ""];
+      if (want === "day") bits.push("显示 " + canvas.dataset.dayBars + " 根");
+      else bits.push("当日成交 " + fills.length + " 笔");
       if ((d["提示"] || []).length) bits.push(d["提示"].join("；"));
       note.textContent = bits.filter(Boolean).join(" ｜ ");
     }
   } catch (e) {
-    if (note) note.textContent = "分时取数失败：" + e.message;
+    if (note) note.textContent = (want === "day" ? "日K" : "分时") + "取数失败：" + e.message;
   }
+}
+
+/* 行内图上方那排「分时 / 日K（+ 根数）」按钮的选中态。 */
+export function markChartMode(box, code, mode) {
+  box.querySelectorAll('[data-act="chartmode"][data-code="' + code + '"]').forEach(b => {
+    b.className = "btn sm" + (b.dataset.mode === mode ? "" : " ghost");
+  });
+  const barsBtn = box.querySelector('[data-act="daybars"][data-code="' + code + '"]');
+  if (barsBtn) {
+    barsBtn.hidden = mode !== "day";
+    barsBtn.textContent = (Flow.dayBars[code] || DAY_BARS[0]) + " 根";
+  }
+}
+
+/* 切分时 / 日K：只换图，不动计划与成交（日K 也不用重新请求行情）。 */
+export async function switchChartMode(fid, code, mode, root) {
+  const box = root || $("#flow-detail") || $("#flow-list") || document;
+  Flow.chartMode[code] = mode;
+  markChartMode(box, code, mode);
+  await renderFlowChart(fid, code, false, box, mode);
+  const canvas = box.querySelector('[data-chart-code="' + code + '"]');
+  if (canvas && mode === "day") canvas.scrollIntoView({block: "center"});
+}
+
+/* 日K 根数：120 ↔ 250（与报告页 K 线档位同源）。 */
+export async function cycleDayBars(fid, code, root) {
+  const box = root || $("#flow-detail") || $("#flow-list") || document;
+  const cur = Flow.dayBars[code] || DAY_BARS[0];
+  const idx = DAY_BARS.indexOf(cur);
+  Flow.dayBars[code] = DAY_BARS[(idx + 1) % DAY_BARS.length];
+  await renderFlowChart(fid, code, false, box, "day");
 }
 
 /* 切标的页签：详情接口一次把整条流都给了，切换不发请求。 */
@@ -403,6 +444,13 @@ function targetBodyEl(code) {
 function targetCardOf(fid, code) {
   const card = (((Flow.list || {})["流"]) || []).find(c => c["流编号"] === fid);
   return ((((card || {})["标的"]) || []).find(t => t["代码"] === code)) || {};
+}
+
+/* 行内图所在的容器：详情卡里是这只标的的 [data-body]，列表里是那张流卡片。
+ * 必须认准容器（不能退到 #flow-detail），否则在列表上点「日K」会找不到画布而静默不动。 */
+function chartBox(el, cardEl) {
+  return el.closest("[data-body]") || (cardEl && cardEl.isConnected ? cardEl : null) ||
+    $("#flow-list") || document;
 }
 
 export async function addFill(code) {
@@ -600,14 +648,18 @@ function onCardAction(e, root) {
   const code = t.dataset.code || Flow.code;
   if (act === "detail") openFlowDetail(fid, true, code);
   else if (act === "minutes") {
-    /* 「分时」= 强制刷新这只标的那张行内分时图（跳过 60 秒缓存）并滚到它 */
-    const root = cardEl || $("#flow-list") || document;
-    renderFlowChart(fid, code, true, root).then(() => {
-      const canvas = root.querySelector('[data-chart-code="' + code + '"]') ||
+    /* 「分时」= 强制刷新这只标的那张行内图（跳过缓存）并滚到它，图型沿用当前选择 */
+    const box = t.closest("[data-body]") || cardEl || $("#flow-list") || document;
+    renderFlowChart(fid, code, true, box).then(() => {
+      const canvas = box.querySelector('[data-chart-code="' + code + '"]') ||
         document.querySelector('[data-chart-code="' + code + '"]');
       if (canvas) canvas.scrollIntoView({block: "center"});
     });
   }
+  else if (act === "chartmode") {
+    switchChartMode(fid, code, t.dataset.mode, chartBox(t, cardEl));
+  }
+  else if (act === "daybars") cycleDayBars(fid, code, chartBox(t, cardEl));
   else if (act === "plan") startFlowJob("flow_plan", {流编号: fid, 代码: code ? [code] : []});
   else if (act === "check") openCheckDialog(fid, code);
   else if (act === "add") { if (cardEl) addTarget(cardEl); }

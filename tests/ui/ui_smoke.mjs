@@ -393,6 +393,11 @@ console.log(`${noBtnCol ? "PASS" : "FAIL"}  表格不再有「按钮」列（列
 if (!noBtnCol) failed++;
 
 await page.waitForSelector("#flow-list canvas.fl-chart", { timeout: 25000 }).catch(() => {});
+/* 画布是异步画的（先取分时/日K 再画）：等 dataset.map 落下去，别抢读像素 */
+await page.waitForFunction(() => {
+  const c = document.querySelector("#flow-list canvas.fl-chart");
+  return !!(c && c.dataset.map && c.dataset.map.length > 20);
+}, { timeout: 30000 }).catch(() => {});
 const rowCharts = await page.locator("#flow-list canvas.fl-chart").count();
 console.log(`${rowCharts > 0 ? "PASS" : "FAIL"}  标的行内分时图已渲染（${rowCharts} 张）`);
 if (!(rowCharts > 0)) failed++;
@@ -407,6 +412,51 @@ if (chartPixels === 0) failed++;
 const bandOptions = await page.locator("#flow-band option").count();
 console.log(`${bandOptions >= 3 ? "PASS" : "FAIL"}  接近带档位（${bandOptions} 档）`);
 if (bandOptions < 3) failed++;
+/* 批注 2（本轮）：行内图要能切「分时 / 日K」，日K 只画蜡烛 + 买卖线 */
+const modeBtns = await page.locator("#flow-list .fl-chart-row [data-act='chartmode']")
+  .allInnerTexts().catch(() => []);
+const modeOk = modeBtns.some(x => x.trim() === "分时") && modeBtns.some(x => x.trim() === "日K");
+console.log(`${modeOk ? "PASS" : "FAIL"}  行内图有「分时 / 日K」切换（${modeBtns.join("/")}）`);
+if (!modeOk) failed++;
+if (rowCharts > 0 && modeOk) {
+  const before = await page.evaluate(() =>
+    document.querySelector("#flow-list canvas.fl-chart").style.height);
+  await page.locator("#flow-list .fl-chart-row [data-act='chartmode'][data-mode='day']")
+    .first().click();
+  await page.waitForFunction(() => {
+    const c = document.querySelector("#flow-list canvas.fl-chart");
+    return !!(c && c.dataset.chartMode === "day" && c.dataset.map &&
+      c.dataset.map.indexOf('"day":true') >= 0);
+  }, { timeout: 30000 }).catch(() => {});
+  await page.waitForTimeout(500);
+  const after = await page.evaluate(() => {
+    const c = document.querySelector("#flow-list canvas.fl-chart");
+    return {h: c.style.height, map: c.dataset.map || "", mode: c.dataset.chartMode || ""};
+  });
+  const dayOk = after.mode === "day" && after.h !== before &&
+    after.map.indexOf('"day":true') >= 0;
+  console.log(`${dayOk ? "PASS" : "FAIL"}  切到日K 后按日K 重画（${before} → ${after.h}）`);
+  if (!dayOk) failed++;
+  const barsBtn = await page.locator("#flow-list [data-act='daybars']").first()
+    .isVisible().catch(() => false);
+  console.log(`${barsBtn ? "PASS" : "FAIL"}  日K 下出现「根数」按钮`);
+  if (!barsBtn) failed++;
+  if (barsBtn) {
+    const labelBefore = await page.locator("#flow-list [data-act='daybars']").first().innerText();
+    await page.locator("#flow-list [data-act='daybars']").first().click();
+    await page.waitForTimeout(2000);
+    const labelAfter = await page.locator("#flow-list [data-act='daybars']").first().innerText();
+    console.log(`${labelAfter !== labelBefore ? "PASS" : "FAIL"}  根数可切换（${labelBefore} → ${labelAfter}）`);
+    if (labelAfter === labelBefore) failed++;
+  }
+  await page.locator("#flow-list .fl-chart-row [data-act='chartmode'][data-mode='minute']")
+    .first().click();
+  await page.waitForTimeout(1500);
+  const back = await page.evaluate(() =>
+    document.querySelector("#flow-list canvas.fl-chart").dataset.chartMode);
+  console.log(`${back === "minute" ? "PASS" : "FAIL"}  能切回分时（${back}）`);
+  if (back !== "minute") failed++;
+}
 if (flowCards > 0) {
   await page.locator("#flow-list .flow-card [data-act='detail']").first().click();
   await page.waitForSelector("#flow-detail .fl-detail-head", { timeout: 15000 }).catch(() => {});
@@ -423,6 +473,14 @@ if (flowCards > 0) {
   if (hasRange) failed++;
   console.log(`${/精确价/.test(planText) ? "PASS" : "FAIL"}  计划条目表带「精确价」列`);
   console.log(`${/买卖线/.test(planText) ? "PASS" : "FAIL"}  分时口径写明「买卖线」`);
+  const hasMech = /机械打分/.test(planText) && /硬约束/.test(planText);
+  console.log(`${hasMech ? "PASS" : "FAIL"}  详情含「机械打分与硬约束」块`);
+  if (!hasMech) failed++;
+  const detailModes = await page.locator("#flow-detail [data-act='chartmode']")
+    .allInnerTexts().catch(() => []);
+  const detailModeOk = detailModes.some(x => x.trim() === "日K");
+  console.log(`${detailModeOk ? "PASS" : "FAIL"}  详情卡的行内图也能切日K`);
+  if (!detailModeOk) failed++;
 } else {
   console.log("INFO  还没有交易流，跳过详情断言（开流表单已在上面断言）");
 }

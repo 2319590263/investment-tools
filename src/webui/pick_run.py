@@ -15,187 +15,14 @@ import time
 
 from . import mech, mechdata
 from .archive import save_pick
+from .mechstock import (chip_focus as _chip_focus, fmt_money as _fmt_money,
+                        flow_rate as _flow_rate, fund_inputs as _fund_inputs,
+                        mech_data as _mech_data, tech_inputs as _tech_inputs)
 from .paths import MODELS_PATH, aiplan, atomic_write, num, pan, rel
 from .pick import (PICK_MAX_CHARS, PICK_MODEL_TOP, PICK_PAGE_TOP, PICK_POOL_SIZE, PICK_PROMPT,
                    PICK_STYLE_CYCLE, PICK_SYSTEM, pick_factpack, pick_markdown, pick_style_of)
 from .plancheck import cost_of
 from .sources import newest_file, pan_files
-
-QUARTERS_OF = {"03-31": 1, "06-30": 2, "09-30": 3, "12-31": 4}
-
-
-def _pct(cur, base):
-    """(cur/base - 1) * 100；缺一侧或 base<=0 返回 None。"""
-    a, b = num(cur), num(base)
-    if a is None or b is None or b <= 0:
-        return None
-    return round((a / b - 1.0) * 100.0, 2)
-
-
-def _diff_pct(a, b):
-    return None if a is None or b is None else round(a - b, 2)
-
-
-def _quarter_scale(period):
-    return QUARTERS_OF.get(str(period or "")[-5:], 4)
-
-
-def _fund_inputs(code, lico, balance, latest, prev, same, row):
-    """一只标的基本面原始值（扣非/营收用单季口径，缺上期就退回累计口径并标注）。"""
-    cur = (lico.get(latest) or {}).get(code) or {}
-    prv = (lico.get(prev) or {}).get(code) or {}
-    last = (lico.get(same) or {}).get(code) or {}
-    bal = (balance.get(latest) or {}).get(code) or {}
-    bal_last = (balance.get(same) or {}).get(code) or {}
-    scale = _quarter_scale(latest)
-    roe = num(cur.get("WEIGHTAVG_ROE"))
-    income = num(cur.get("TOTAL_OPERATE_INCOME"))
-    profit = num(cur.get("PARENT_NETPROFIT"))
-    out = {
-        "roe": None if roe is None else round(roe * 4.0 / scale, 2),
-        "gross_margin": num(cur.get("XSMLL")),
-        "net_margin": None if (income is None or profit is None or income <= 0)
-                              else round(profit / income * 100.0, 2),
-        "rev_yoy_q": num(cur.get("YSTZ")),
-        "deduct_yoy": num(cur.get("SJLTZ")),
-        "debt_ratio": row.get("资产负债率_pct"),
-        "应收": num(bal.get("ACCOUNTS_RECE")), "净资产": num(bal.get("TOTAL_EQUITY")),
-        "应收_去年": num(bal_last.get("ACCOUNTS_RECE")),
-    }
-    # 单季口径：有上期累计就相减，否则退回累计同比（口径写进产物）
-    if income is not None and num(prv.get("TOTAL_OPERATE_INCOME")) is not None:
-        q_now = income - num(prv.get("TOTAL_OPERATE_INCOME"))
-        q_last = num(last.get("TOTAL_OPERATE_INCOME"))
-        q_last_prev = num((lico.get(_prev_of_same(same)) or {}).get(code, {}).get("TOTAL_OPERATE_INCOME"))
-        if q_last is not None and q_last_prev is not None:
-            out["rev_yoy_q"] = _pct(q_now, q_last - q_last_prev)
-    eps = num(cur.get("DEDUCT_BASIC_EPS"))
-    eps_prev = num(prv.get("DEDUCT_BASIC_EPS"))
-    eps_last = num(last.get("DEDUCT_BASIC_EPS"))
-    if eps is not None and eps_prev is not None and eps_last is not None:
-        q_now = eps - eps_prev
-        q_last = eps_last - num((lico.get(_prev_of_same(same)) or {}).get(code, {}).get("DEDUCT_BASIC_EPS") or 0.0)
-        if q_last > 0:
-            out["deduct_yoy"] = _pct(q_now, q_last)
-    ocf = num(cur.get("MGJYXJJE"))
-    shares = num(row.get("总股本"))
-    if ocf is not None and shares is not None and profit not in (None, 0):
-        out["ocf_to_profit"] = round(ocf * shares / profit * 100.0, 2)
-    if out["应收"] is not None and out["应收_去年"] is not None:
-        ar_yoy = _pct(out["应收"], out["应收_去年"])
-        rev_yoy = out["rev_yoy_q"]
-        out["ar_vs_rev"] = _diff_pct(ar_yoy, rev_yoy)
-    out["goodwill_ratio"] = None          # 商誉没有数据源 → 该小项记缺失
-    out["两年亏损且营收不足1亿"] = bool(
-        profit is not None and profit < 0
-        and num(last.get("PARENT_NETPROFIT")) is not None and num(last.get("PARENT_NETPROFIT")) < 0
-        and income is not None and income < 1e8)
-    return out
-
-
-def _prev_of_same(period):
-    """去年同期的上一期（算去年同期单季用）。'2025-06-30' → '2025-03-31'。"""
-    text = str(period or "")[:10]
-    if len(text) < 10:
-        return None
-    y, m, _d = (int(x) for x in text.split("-"))
-    prev = mechdata.prev_periods(text)[0]
-    return prev if prev else ("%04d-12-31" % (y - 1) if m == 3 else text)
-
-
-def _macd_code(dif, dea):
-    """MACD 状态编码：3=DIF>DEA 且双线在 0 轴上方；1=DIF>DEA 但双线在 0 轴下方；0=DIF<DEA。"""
-    if dif is None or dea is None:
-        return None
-    if dif > dea:
-        return 3 if (dif > 0 and dea > 0) else 1
-    return 0
-
-
-def _chip_focus(bars, holder_value):
-    """90% 筹码集中度的取值：优先东财 F10 的「股东户数集中度」，它不是数字时
-    退回「60 日价格区间集中度」——公式与文件一致（(高-低)/(高+低)×100%）。"""
-    v = num(holder_value)
-    if v is not None:
-        return v, "东财 F10 股东户数集中度"
-    rows = (bars or [])[-60:]
-    highs = [x for x in (num(b.get("high")) for b in rows) if x is not None]
-    lows = [x for x in (num(b.get("low")) for b in rows) if x is not None]
-    if not highs or not lows:
-        return None, None
-    hi, lo = max(highs), min(lows)
-    if hi + lo <= 0:
-        return None, None
-    return round((hi - lo) / (hi + lo) * 100.0, 2), "60 日价格区间集中度（公式与文件一致）"
-
-
-def _tech_inputs(bars, bench, row):
-    """技术面原始指标（同时给机械打分与事实包）。"""
-    from . import mechtech
-    closes_ = mechtech.closes(bars)
-    close = closes_[-1] if closes_ else None
-    out = {"MACD": None, "RSI14": None, "量能比_20_60": None, "量价比_5": None,
-           "超额20_pct": None, "换手10日_pct": None}
-    for n in (20, 60, 120, 250):
-        ma = mechtech.sma(closes_, n)
-        dist = None if (ma is None or close is None or not ma) else round((close / ma - 1) * 100, 2)
-        out["MA%s距离_pct" % n] = dist
-        if n == 20 and dist is not None and row is not None:
-            row["最新收盘"] = close
-    out["量能比_20_60"] = mechtech.vol_ratio(bars)
-    out["量价比_5"] = mechtech.volume_price_ratio(bars)
-    dif, dea = mechtech.macd(closes_)
-    out["MACD"] = _macd_code(dif, dea)
-    out["MACD_DIF"], out["MACD_DEA"] = dif, dea
-    out["RSI14"] = mechtech.rsi(closes_)
-    out["超额20_pct"] = mechtech.excess_return_pct(bars, bench, 20)
-    turns = [num(b.get("换手_pct")) for b in (bars or [])[-10:]]
-    turns = [t for t in turns if t is not None]
-    if not turns and row:
-        # 腾讯兜底日K 没有换手列：用 成交量(手) / 流通股本(股) 自算（口径一致，页面标注）
-        shares = num(row.get("流通股本"))
-        if shares:
-            turns = [num(b.get("vol")) * 100.0 / shares * 100.0
-                     for b in (bars or [])[-10:] if num(b.get("vol")) is not None]
-    if turns:
-        out["换手10日_pct"] = round(sum(turns) / len(turns), 2)
-    return out
-
-
-def _mech_data(row, fin, tech, env, ind_agg, ind, extras=None):
-    """机械打分的输入字典（键与 mech.MODULES 一一对应）。"""
-    extras = extras or {}
-    ind_row = (ind_agg or {}).get(ind) or {}
-    data = {
-        "行业": ind,
-        "hs300_pe_pct": None, "north20": None, "ind_pe_pct": None,   # 无数据源（见 mech.MISSING_ITEMS）
-        "bond10y": env.get("bond10y"), "amount5": env.get("amount5"),
-        "limitup5": env.get("limitup5"),
-        "ind_profit_yoy": ind_row.get("净利同比_pct"), "ind_rev_yoy": ind_row.get("营收同比_pct"),
-        "ind_etf_flow": extras.get("行业ETF资金率"), "ind_north_change": extras.get("北向行业变动"),
-        "roe": fin.get("roe"), "gross_margin": fin.get("gross_margin"),
-        "net_margin": fin.get("net_margin"), "deduct_yoy": fin.get("deduct_yoy"),
-        "rev_yoy_q": fin.get("rev_yoy_q"), "debt_ratio": fin.get("debt_ratio"),
-        "ocf_to_profit": fin.get("ocf_to_profit"), "goodwill_ratio": fin.get("goodwill_ratio"),
-        "ar_vs_rev": fin.get("ar_vs_rev"),
-        "ma20": tech.get("MA20距离_pct"), "ma60": tech.get("MA60距离_pct"),
-        "ma120": tech.get("MA120距离_pct"), "ma250": tech.get("MA250距离_pct"),
-        "vol_trend": tech.get("量能比_20_60"), "vol_price": tech.get("量价比_5"),
-        "macd": tech.get("MACD"), "rsi14": tech.get("RSI14"),
-        "excess20": tech.get("超额20_pct"), "chip_focus": extras.get("筹码集中度"),
-        "main_flow_ratio": extras.get("主力净流入率"),
-        "lhb_inst": extras.get("龙虎榜机构"),
-        "top10_free": extras.get("十大流通占比"),
-        "turnover10": tech.get("换手10日_pct"),
-        "no_penalty": extras.get("无监管处罚"), "no_profit_cut": extras.get("无业绩下修"),
-        "no_reduction": extras.get("无减持计划"),
-    }
-    return data
-
-
-def _fmt_money(v, nd=0):
-    return "—" if v is None else ("%.*f" % (nd, v))
-
 
 def run_pick(log, ctl, opts):
     """荐股主流程（全大盘）。返回落盘摘要；取消返回 {'__canceled__': True}。"""
@@ -382,14 +209,6 @@ def run_pick(log, ctl, opts):
             "候选池": len(pool), "送模型": len(final), "推荐榜": len(payload["推荐榜"]),
             "被否决": len(vetoed),
             "模型": model_layer.get("model"), "模型错误": model_layer.get("error")}
-
-
-def _flow_rate(row):
-    """当日主力净流入率（%）= 主力净流入 / 流通市值（全池初筛用的近似口径）。"""
-    flow, size = row.get("主力净流入_万"), row.get("流通市值_亿")
-    if flow is None or not size:
-        return None
-    return round(flow / 1e4 / size * 100.0, 2)
 
 
 def _north_industry_avg(per_code, code_ind):

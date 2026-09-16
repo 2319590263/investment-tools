@@ -42,10 +42,11 @@ JS_MAX_LINES = 900
 PACKAGE_MODULES = ("__init__.py", "__main__.py", "paths.py", "sources.py", "store.py",
                    "archive.py", "market.py", "jobs.py", "pick.py", "pick_run.py",
                    "pickrank.py", "mech.py", "mechdata.py", "mechtech.py",
+                   "mechstock.py",
                    "background.py", "plancheck.py", "planlines.py", "quotes.py",
                    "overview.py",
                    "alerts.py", "trash.py", "track.py", "track_run.py", "trackview.py",
-                   "flow.py", "flowbook.py", "flow_run.py", "flowview.py",
+                   "flow.py", "flowbook.py", "flow_run.py", "flowview.py", "flowplan.py",
                    "webserver.py", "run_aiplan.py",
                    "holdings_ths.py", "holdings_trades.py", "holdings_sync.py")
 JS_MODULES = ("main.js", "core/util.js", "core/api.js", "core/app.js", "core/poller.js",

@@ -45,6 +45,86 @@ function styleOptions(pick) {
 }
 
 
+/* 行内图上方那排按钮：分时 / 日K（+ 日K 根数）。选中态由 views/flow.js 的
+ * markChartMode() 在渲染后统一修正（渲染时不知道自己当前是哪种图）。 */
+function chartBar(code) {
+  return '<div class="fl-chart-bar">' +
+    '<button class="btn sm" data-act="chartmode" data-mode="minute" data-code="' + esc(code) + '">分时</button>' +
+    '<button class="btn sm ghost" data-act="chartmode" data-mode="day" data-code="' + esc(code) + '">日K</button>' +
+    '<button class="btn sm ghost" data-act="daybars" data-code="' + esc(code) + '" hidden>120 根</button>' +
+    '<span class="muted">买卖线 = 交易计划的操作价位（买点 / 减仓 / 止损 / 止盈点）</span></div>';
+}
+
+
+function scoreCls(v) {
+  const n = num(v);
+  if (n === null) return "flat";
+  if (n >= 70) return "ok";
+  if (n >= 55) return "accent";
+  if (n >= 40) return "warn";
+  return "bad";
+}
+
+
+/* 机械打分 + 硬约束 + 校正记录：计划就是在这套框子里算出来的（用户批注 1）。 */
+function scoreBlock(t) {
+  const s = t["机械打分"], k = t["硬约束"];
+  const corr = t["约束校正"] || [];
+  const tips = t["约束提示"] || [];
+  if (!s && !k) {
+    return '<div class="muted">这份计划还是旧算法出的（没有机械打分与硬约束）：点「计算」' +
+      "会先按《机器打分逻辑.txt》跑 6 模块机械打分（含一票否决），再由模型在约束内出价位。</div>";
+  }
+  let html = "";
+  if (s) {
+    const veto = s["否决"] || [];
+    html += '<div class="row" style="gap:6px;flex-wrap:wrap;align-items:center">' +
+      chip("机械分 " + fmt(s["机械分"], 1), scoreCls(s["机械分"])) +
+      chip("实得 " + fmt(s["实得"], 1) + " / 可得 " + fmt(s["可得"], 1), "flat") +
+      (s["行业"] ? chip("行业 " + s["行业"], "flat") : "") +
+      (veto.length ? chip("一票否决 " + veto.length + " 条", "bad") : chip("未命中否决", "ok")) +
+      chip("取数 " + (s["取数时间"] || "—"), "flat") + "</div>";
+    (s["模块"] || []).forEach(m => {
+      html += '<span class="chip flat">' + esc(m["模块"]) + " " + fmt(m["得分"], 1) +
+        "/" + esc(m["满分"]) + "</span>";
+    });
+    if (veto.length) {
+      html += '<div class="down">' + veto.map(v =>
+        "· " + esc(v["范围"] || "") + "：" + esc(v["原因"] || "")).join("<br>") + "</div>";
+    }
+    const miss = s["缺失"] || [];
+    if (miss.length) {
+      html += '<div class="muted">缺失 ' + miss.length + " 项（只从分母里去掉，不记 0）：" +
+        esc(miss.map(x => x["指标"]).join("、")) + "</div>";
+    }
+    if ((s["降级"] || []).length) {
+      html += '<div class="muted">取数降级：' + esc(s["降级"].join("；")) + "</div>";
+    }
+    if (s["错误"]) html += '<div class="fail">' + esc(s["错误"]) + "</div>";
+  }
+  if (k) {
+    html += '<div class="row" style="gap:6px;flex-wrap:wrap;align-items:center">' +
+      chip("档位 " + (k["档位"] || "—"),
+           k["允许买入"] ? scoreCls(k["机械分"]) : "bad") +
+      chip("仓位上限 " + fmtMoney(k["仓位金额上限_元"], 0) + " 元", "flat") +
+      chip("亏损预算 " + fmtMoney(k["亏损预算_元"], 0) + " 元", "flat") +
+      chip("止损幅度上限 " + fmt(k["止损幅度上限_pct"], 1) + "%", "flat") +
+      chip("目标盈利 " + fmtMoney(k["目标盈利_元"], 0) + " 元", "flat") + "</div>";
+    html += '<div class="muted">' + esc(k["档位说明"] || "") +
+      "（仓位上限 = 分配资金 " + fmtMoney(k["分配资金"], 0) + " 元 × " +
+      fmt(k["仓位上限_pct"], 2) + "%；亏损预算 = 分配资金 × 流最大亏损 " +
+      fmt(k["最大亏损_pct"], 2) + "%）</div>";
+  }
+  if (corr.length) {
+    html += '<div class="sec-title">硬约束校正（模型越界 → 程序自动改，逐条标注）</div><div class="fl-events">' +
+      corr.map(c => '<div class="warn">· ' + esc(c["项"]) + "：" + esc(String(c["原值"])) +
+        " → " + esc(String(c["校正值"])) + " ｜ " + esc(c["原因"]) + "</div>").join("") + "</div>";
+  }
+  tips.forEach(x => { html += '<div class="muted">· ' + esc(String(x)) + "</div>"; });
+  return html;
+}
+
+
 function planCell(t) {
   const plan = t["计划"] || {};
   if (!plan["产物路径"]) {
@@ -87,6 +167,7 @@ function targetRow(t) {
   /* 分时图紧贴标的那一行，**操作按钮放到分时图下方**（批注 2/3）：
      表格不再有按钮列，行高只由标的信息决定，中间不会再有空白。 */
   html += '<tr class="fl-chart-row"><td colspan="9">' +
+    chartBar(code) +
     '<canvas class="fl-chart" data-chart-code="' + esc(code) + '"></canvas>' +
     '<div class="muted" data-chart-note="' + esc(code) + '">正在取分时 …</div>' +
     '<div class="row fl-row-act">' +
@@ -296,11 +377,13 @@ function targetBody(t, tools) {
   if (plan["一句话结论"]) html += '<div class="hero-quote">' + esc(plan["一句话结论"]) + "</div>";
   html += '<div class="sec-title">当前计划的关键价位（精确价 + 手数）</div>' +
     trackLevelsHtml({价格: pnl["现价"]}, t["关键价位"], lots);
-  /* 分时图：买卖点标在成交价上，计划线用同一份 planprices.js 收敛（批注 1）。 */
-  html += '<div class="sec-title">当日分时（交易计划的操作买卖线）' +
+  html += '<div class="sec-title">机械打分与硬约束（计划就是这么算出来的）</div>' + scoreBlock(t);
+  /* 行内图：分时 / 日K 切换；计划线用同一份 planprices.js 收敛（批注 1）。 */
+  html += '<div class="sec-title">分时 / 日K（交易计划的操作买卖线）' +
     '<button class="btn sm ghost fl-min-refresh" data-act="minutes" data-code="' + esc(code) +
-    '">刷新分时</button></div>' +
-    '<div class="fl-chart-box"><canvas class="fl-chart" data-chart-code="' + esc(code) + '"></canvas>' +
+    '">刷新图表</button></div>' +
+    '<div class="fl-chart-box">' + chartBar(code) +
+    '<canvas class="fl-chart" data-chart-code="' + esc(code) + '"></canvas>' +
     '<div class="muted" data-chart-note="' + esc(code) + '">正在取分时 …</div></div>';
   html += '<div class="sec-title">当前计划条目</div>' + trackPlanTableHtml(t["计划条目"]);
   html += '<div class="sec-title">补录成交（以你录的为准 · 只算盈亏不改计划）</div>' +

@@ -110,14 +110,18 @@ export function trackPlanTableHtml(plan) {
   plan.forEach(r => {
     /* 精确价（用户批注 5）：只给一个可执行价位；失效条件已由服务端过滤掉「只说反面」的废话 */
     const px = num(r["精确价"]);
-    html += "<tr>" +
+    const voided = !!r["作废"];
+    html += "<tr" + (voided ? ' class="tk-void"' : "") + ">" +
       "<td>" + esc(r["编号"]) + "</td>" +
-      "<td><b>" + esc(r["动作"] || "—") + "</b>" + (r["无动作"] ? chip("无动作", "flat") : "") + "</td>" +
+      "<td><b>" + esc(r["动作"] || "—") + "</b>" +
+      (r["无动作"] ? chip("无动作", "flat") : "") +
+      (voided ? chip("已作废", "bad") : "") + "</td>" +
       '<td class="wrap muted">' + esc(r["触发条件"] || "—") + "</td>" +
       '<td class="num mono"><b>' + (px === null ? "—" : fmt(px, 3)) + "</b></td>" +
-      '<td class="num">' + (r["股数"] == null ? "—" : fmt(r["股数"], 0)) + "</td>" +
-      '<td class="num">' + (r["金额_元"] == null ? "—" : fmt(r["金额_元"], 0)) + "</td>" +
-      '<td class="wrap muted">' + esc(r["失效条件"] || "—") + "</td></tr>";
+      '<td class="num">' + (voided || r["股数"] == null ? "—" : fmt(r["股数"], 0)) + "</td>" +
+      '<td class="num">' + (voided || r["金额_元"] == null ? "—" : fmt(r["金额_元"], 0)) + "</td>" +
+      '<td class="wrap muted">' + esc(voided ? (r["作废原因"] || "已作废")
+        : (r["失效条件"] || "—")) + "</td></tr>";
   });
   return html + "</tbody></table></div>";
 }

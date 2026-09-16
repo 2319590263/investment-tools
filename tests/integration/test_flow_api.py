@@ -198,6 +198,18 @@ class TestFlowApi(unittest.TestCase):
         self.assertEqual(payload["交易流"]["流内标的数"], 2)
         self.assertIn("交易流状态（成交与盈亏，权威口径）", payload["事实包文本"])
         self.assertLessEqual(payload["事实包"]["字符数"], 12000)
+        # 机械打分 + 硬约束：计划就是这么算出来的（事实包最前面两章永不裁剪）
+        self.assertIn("机械打分", payload)
+        self.assertIn("硬约束", payload)
+        self.assertIn("约束校正", payload)
+        self.assertIn("机械打分（100分制", payload["事实包文本"])
+        self.assertIn("硬约束（不可越界）", payload["事实包文本"])
+        cons = payload["硬约束"]
+        self.assertIn(cons["档位"], ("可满配", "半配", "小仓", "只减不加", "一票否决"))
+        self.assertGreater(cons["亏损预算_元"], 0)
+        self.assertGreater(cons["仓位金额上限_元"], 0)
+        self.assertIn(cons["止损幅度上限_pct"], (3.0, 5.0, 8.0))
+        self.assertEqual(cons["允许买入"], cons["档位"] not in ("只减不加", "一票否决"))
 
         status, detail = self.server.get("/api/flow?id=" + fid)
         self.assertEqual(status, 200, detail)
@@ -205,10 +217,14 @@ class TestFlowApi(unittest.TestCase):
         self.assertEqual(detail["选中"], code_a)
         self.assertEqual(by_code[code_a]["计划"]["产物路径"], row["计划"])
         self.assertTrue(by_code[code_a]["计划"]["错误"])
+        self.assertIn("机械打分", by_code[code_a])
+        self.assertIn("硬约束", by_code[code_a])
+        self.assertIsInstance(by_code[code_a]["约束校正"], list)
         self.assertEqual(detail["卡"]["状态"], "进行中")
         status, detail_b = self.server.get("/api/flow?id=%s&code=%s" % (fid, code_b))
         self.assertEqual(detail_b["选中"], code_b)
         self.assertIsNone(detail_b["标的"][1]["计划"]["产物路径"])
+        self.assertIsNone(detail_b["标的"][1]["机械打分"])
 
         # 补录成交：不改计划
         status, filled = self.server.post("/api/flow/fill", {
@@ -318,8 +334,40 @@ class TestFlowApi(unittest.TestCase):
         status, body = self.server.get("/api/flow?id=F-20200101-99")
         self.assertEqual(status, 404)
         status, body = self.server.post("/api/flow/target/add", {"流编号": "__missing__",
-                                                                 "代码": "600967"})
+                                                                "代码": "600967"})
         self.assertEqual(status, 404)
+
+    def test_chart_modes(self):
+        """行内图：mode=minute（默认，字段向后兼容）与 mode=day（日K + 同一份关键价位）。"""
+        fid, _out = self._new_flow()
+        code = self._add_first_target(fid)
+        status, minute = self.server.get("/api/flow/minutes?id=%s&code=%s" % (fid, code))
+        self.assertEqual(status, 200, minute)
+        self.assertEqual(minute["模式"], "minute")
+        self.assertIn("分时", minute)
+        self.assertNotIn("日K", minute)
+        self.assertIn("关键价位", minute)
+        self.assertIn("成交", minute)
+        status, day = self.server.get("/api/flow/minutes?id=%s&code=%s&mode=day" % (fid, code))
+        self.assertEqual(status, 200, day)
+        self.assertEqual(day["模式"], "day")
+        self.assertIn("bars", day["日K"])
+        self.assertIn(day["日K"]["复权"], ("前复权", None))
+        self.assertEqual(day["日K"]["根数"], len(day["日K"]["bars"]))
+        self.assertIn("买卖线", day["口径"])
+        self.assertEqual(day["关键价位"], minute["关键价位"], "两种模式用同一份计划价位")
+        status, bad = self.server.get("/api/flow/minutes?id=%s&code=%s&mode=week" % (fid, code))
+        self.assertEqual(status, 400, bad)
+        self.assertIn("mode", bad["error"])
+        status, missing = self.server.get("/api/flow/minutes?id=%s&code=999999" % fid)
+        self.assertEqual(status, 404, missing)
+        status, deleted = self.server.post("/api/flow/delete", {"流编号": fid})
+        self.assertEqual(status, 200, deleted)
+        for moved in deleted.get("移入") or []:
+            target = os.path.join(ROOT, moved)
+            if os.path.exists(target):
+                os.remove(target)
+        self.created = []
 
 
 if __name__ == "__main__":

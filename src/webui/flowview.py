@@ -7,6 +7,7 @@
 
 from . import alerts as alerts_store
 from . import flow
+from . import track
 from .paths import aiplan, num, rel
 from .plancheck import session_of
 from .track import quote_brief
@@ -30,6 +31,22 @@ def _price(node, quote, refresh):
     return None, "未取到", None
 
 
+def _plan_rows(node):
+    """这只标的的计划条目：直接读计划产物（流里存的只是快照，不吃硬约束的作废/改股数）。
+
+    读不到产物（还没算过 / 文件被删）就返回 None，调用方退回快照。
+    """
+    path = ((node.get("计划") or {}).get("产物路径"))
+    if not path:
+        return None
+    try:
+        payload = aiplan.read_json(track.abs_path(path))
+    except Exception:              # noqa: BLE001  产物坏了不该拖垮详情页
+        return None
+    rows = track.plan_items(payload) if payload else None
+    return rows or None
+
+
 def target_card(flow_doc, node, fresh=None):
     """一只标的的卡片数据（纯展示，不改文件）。"""
     pnl = node.get("盈亏") or {}
@@ -50,6 +67,9 @@ def target_card(flow_doc, node, fresh=None):
                  "方向": plan.get("方向"), "置信度": plan.get("置信度"),
                  "一句话结论": plan.get("一句话结论"), "错误": plan.get("错误"),
                  "关键价位": plan.get("关键价位") or {}, "条目": plan.get("条目") or []},
+        # 机械打分（量化底座）+ 硬约束 + 校正记录：与计划产物同一份
+        "机械打分": plan.get("机械打分"), "硬约束": plan.get("硬约束"),
+        "约束校正": plan.get("约束校正") or [], "约束提示": plan.get("约束提示") or [],
         "下一步": flow.next_action(node, price=pnl.get("现价")),
         "到价": flow.marks(node, pnl.get("现价")),
         "本次提醒": [m.get("文案") for m in (fresh or [])],
@@ -172,8 +192,10 @@ def detail(fid, quote_map=None, refresh=False, today=None, code=None):
         card = target_card(doc, node)
         from .planlines import meaningful_failure, trigger_price
         live = (node.get("盈亏") or {}).get("现价")
+        # 计划条目以**产物**为准（流里存的只是快照）：硬约束做的作废 / 改股数写的是产物
+        rows = _plan_rows(node) or (card["计划"].get("条目") or [])
         items = []
-        for it in (card["计划"].get("条目") or []):
+        for it in rows:
             row = dict(it)
             row["精确价"] = trigger_price(row.get("价格区间"), row.get("动作"), live)
             row["失效条件"] = meaningful_failure(row.get("失效条件") or row.get("失效条件原文"),
@@ -189,6 +211,9 @@ def detail(fid, quote_map=None, refresh=False, today=None, code=None):
             "体检": node.get("体检") or [],
             "计划": plan, "计划条目": items,
             "关键价位": plan.get("关键价位") or {},
+            # 机械打分（量化底座）+ 硬约束 + 校正记录：与产物同一份（卡片上就有）
+            "机械打分": card.get("机械打分"), "硬约束": card.get("硬约束"),
+            "约束校正": card.get("约束校正") or [], "约束提示": card.get("约束提示") or [],
             "持仓": node.get("持仓") or {}, "盈亏": node.get("盈亏") or {},
             "台账": node.get("台账") or {}, "期初": node.get("期初") or {},
             "手数": lots_of(node),
@@ -201,14 +226,16 @@ def detail(fid, quote_map=None, refresh=False, today=None, code=None):
             "事件": list(reversed(doc.get("事件") or []))[:40]}, None
 
 
-def minutes(fid, code, refresh=False):
-    """单只标的的当日分时 + 成交点 + 计划线（只读，不写盘）。
+def minutes(fid, code, refresh=False, mode="minute"):
+    """单只标的的行内图：分时（mode=minute）或日K（mode=day）+ 计划操作线（只读，不写盘）。
 
-    分时走腾讯（quotes.fetch_minutes：60 秒缓存 + 300ms 串行限速），报价走一次
-    东财批量（5 秒缓存）；计划线沿用卡片存下来的「关键价位」结构，前端用同一份
-    planprices.js 收敛成精确价位，避免第二套解析口径。
+    分时走腾讯（quotes.fetch_minutes：60 秒缓存 + 300ms 串行限速），日K 走 market.kline_bundle
+    （本地缓存优先，没有就按需拉取，当天落 data/cache/mech/kline_<日期>/），报价走一次东财批量
+    （5 秒缓存）。两种模式的计划线都用同一份「关键价位」结构，前端用同一份 planprices.js
+    收敛成精确价位，避免第二套解析口径。
     """
     from . import quotes as quotes_mod
+    from .market import kline_bundle
     doc, err = flow.load_flow(fid)
     if err:
         return None, err
@@ -216,12 +243,19 @@ def minutes(fid, code, refresh=False):
     if node is None:
         return None, terr
     c6 = aiplan.code6(node.get("代码") or "")
+    day = str(mode or "minute").lower() == "day"
     quote, hints = quotes_mod.fetch_quotes([c6], refresh=refresh)
     q = (quote or {}).get(c6) or {}
-    minute = quotes_mod.fetch_minutes(c6, refresh=refresh)
     hints = list(hints or [])
-    if minute is None:
-        hints.append("分时取不到（北交所 / 停牌 / 网络）：只显示报价与计划线")
+    bundle, minute = None, None
+    if day:
+        bundle = kline_bundle(c6, 250)
+        if not bundle or not (bundle.get("bars") or []):
+            hints.append("日K 取不到（停牌 / 网络）：只显示报价与计划线")
+    else:
+        minute = quotes_mod.fetch_minutes(c6, refresh=refresh)
+        if minute is None:
+            hints.append("分时取不到（北交所 / 停牌 / 网络）：只显示报价与计划线")
     fills = []
     for f in (node.get("成交") or []):
         price = num(f.get("价格"))
@@ -230,16 +264,25 @@ def minutes(fid, code, refresh=False):
         fills.append({"序号": f.get("序号"), "日期": f.get("日期"), "时间": f.get("时间"),
                       "方向": f.get("方向"), "价格": price, "数量": num(f.get("数量")),
                       "来源": f.get("来源"), "备注": f.get("备注")})
-    return {
+    out = {
         "流编号": fid, "代码": c6, "名称": node.get("名称") or c6,
-        "打法": node.get("打法") or flow.DEFAULT_STYLE,
+        "打法": node.get("打法") or flow.DEFAULT_STYLE, "模式": "day" if day else "minute",
         "分时": minute, "分时日期": str(session_of()["现在"])[:10],
         "报价": q, "昨收": q.get("昨收"),
         "关键价位": ((node.get("计划") or {}).get("关键价位")) or {},
         "成交": fills, "提示": hints,
         "口径": "分时=腾讯当日分钟线（60 秒缓存）｜报价=东财批量（5 秒缓存）"
                 "｜买卖线=交易计划的操作价位（买点/减仓/止损/止盈点）",
-    }, None
+    }
+    if day:
+        out["日K"] = {"bars": (bundle or {}).get("bars") or [],
+                      "来源": (bundle or {}).get("来源"),
+                      "复权": (bundle or {}).get("复权") or "前复权",
+                      "根数": len((bundle or {}).get("bars") or []),
+                      "抓取时间": (bundle or {}).get("抓取时间")}
+        out["口径"] = "日K=东财/腾讯前复权日线（当天缓存）｜报价=东财批量（5 秒缓存）" \
+                      "｜买卖线=交易计划的操作价位（买点/减仓/止损/止盈点）"
+    return out, None
 
 
 def console_block(quote_map=None, refresh=False):

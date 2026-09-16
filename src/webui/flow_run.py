@@ -13,6 +13,8 @@ import subprocess
 from . import background
 from . import alerts as alerts_store
 from . import flow as flow_store
+from . import flowplan
+from . import mechstock
 from . import quotes as quotes_mod
 from . import track
 from . import track_run
@@ -39,7 +41,14 @@ def plan_prompt(style):
             "【交易流状态】里）：合计盈亏已经达到目标盈利时，明确建议减仓/清仓落袋；"
             "触及最大亏损时明确建议止损离场。\n"
             "4. 已经成交过的价位不要再重复建议建仓；未成交的条目可以继续沿用，或按新数据微调。\n"
-            "5. 没有新数据支持时不要为了改动而改动——计划要尽量稳定。" % (style, hint))
+            "5. 没有新数据支持时不要为了改动而改动——计划要尽量稳定。\n"
+            "6. **必须遵守【硬约束（不可越界）】**：档位决定本次能不能买、仓位金额上限与股数上限；"
+            "止损价要同时满足「打法止损幅度上限」与「亏损预算」"
+            "（Σ 计划买入股数 ×（买入价 − 止损价）≤ 亏损预算）；股数一律写 100 的整数倍。"
+            "越界的条目会被程序自动下调或作废并在页面上标注，所以请直接给合规数字，不要试探上限。\n"
+            "7. 【机械打分（100分制）】是这只标的的量化底座：方向、仓位与风险叙述都要跟它一致"
+            "（分高才谈得上加仓，分低只谈减仓/清仓与离场条件）；不要自行改写分数或缺失项。"
+            % (style, hint))
 
 CHECK_SYSTEM = ("你是 A 股持仓的「意外排查」助手。用户已经有一条交易计划和一条持仓流，"
                 "你要只依据给定数据判断：有没有出现会让计划失效的意外情况"
@@ -226,6 +235,17 @@ def _plan_one(log, ctl, doc, node, opts):
     log("[OK] 持仓 %s 股 ｜ 合计盈亏 %s 元 ｜ 目标进度 %s%%"
         % (_num((node.get("持仓") or {}).get("股数"), 0), _num((node.get("盈亏") or {}).get("合计_元")),
            _num((node.get("盈亏") or {}).get("进度_pct"))))
+    # --- 机械打分（100 分制，荐股同一套阈值与取数）→ 硬约束 ---
+    log("[..] 机械打分（6 模块 + 一票否决，口径照抄《机器打分逻辑.txt》）…")
+    score, score_err = mechstock.score_one(c6, refresh=bool((opts or {}).get("refresh")), log=log)
+    if score_err:
+        log("[WARN] 机械打分拿不到：%s（约束按「缺失档」处理）" % score_err)
+    for h in (score or {}).get("降级") or []:
+        log("[WARN] 机械打分降级：%s" % h)
+    cons = flowplan.constraints(score, doc, node, price)
+    log("[OK] 硬约束：%s" % flowplan.summary(cons, []))
+    if not cons["允许买入"]:
+        log("[WARN] 档位「%s」：%s" % (cons["档位"], cons["档位说明"]))
     prev_doc, prev_path = _prev_payload(node)
     mech = track.mech_reference(prev_doc, quote)
     tech, s3_path = background.stock3d_tech(c6)
@@ -254,7 +274,10 @@ def _plan_one(log, ctl, doc, node, opts):
     fact = track.factpack_sections(data, track_run.clamp_chars((opts or {}).get("max_chars")),
                                    front=[("交易流状态（成交与盈亏，权威口径）",
                                            flow_state_lines(doc, node, price, brief.get("来源"),
-                                                            brief.get("时间")))])
+                                                            brief.get("时间"))),
+                                          ("机械打分（100分制，量化底座）",
+                                           flowplan.score_lines(score, cons)),
+                                          ("硬约束（不可越界）", flowplan.constraint_lines(cons))])
     log("    事实包 %s 字符（%d 章节%s）"
         % (fact["字符数"], len(fact["章节"]),
            "，裁剪 " + "、".join(fact["裁剪"]) if fact["裁剪"] else ""))
@@ -264,6 +287,19 @@ def _plan_one(log, ctl, doc, node, opts):
                                              system=FLOW_SYSTEM, prompt=plan_prompt(style))
     if ctl.get("cancel"):
         raise RuntimeError("已取消")
+    # 硬约束自动校正（模型越界 → 下调股数 / 收窄止损 / 作废条目，逐条标注）
+    corrections, cons_notes = [], []
+    if plan_obj:
+        plan_obj, corrections, cons_notes = flowplan.enforce(plan_obj, cons, price)
+        # 落盘的产物必须是**校正后**的计划：报告页 / 总控台计划线 / 到价提醒都读它
+        research["json"] = plan_obj
+        research["约束校正"] = corrections
+        log("[OK] 硬约束校正 %d 条%s"
+            % (len(corrections),
+               ("：" + "；".join("%s %s→%s" % (c.get("项"), c.get("原值"), c.get("校正值"))
+                                for c in corrections[:4])) if corrections else ""))
+    for tip in cons_notes:
+        log("    · %s" % tip)
     is_etf = bool(node.get("是否ETF"))
     checks = aiplan.mechanical_checks(account, data["持仓"], price, plan_obj or {}, is_etf,
                                       track_run._other_mv(holdings, c6))
@@ -311,6 +347,23 @@ def _plan_one(log, ctl, doc, node, opts):
                                    "结论": "%s ｜ %s" % (r.get("状态") or "—", r.get("说明") or "")}
                                   for r in (mech.get("计划") or [])]},
         "机械参考": mech, "事实包文本": fact["文本"],
+        # 机械打分（量化底座）+ 硬约束 + 校正记录：页面直接照这三块显示
+        "机械打分": {
+            "机械分": cons.get("机械分"), "实得": cons.get("实得"), "可得": cons.get("可得"),
+            "行业": cons.get("行业"), "模块": cons.get("模块") or [],
+            "缺失": cons.get("缺失") or [], "否决": cons.get("否决") or [],
+            "口径": (score or {}).get("口径"), "取数时间": (score or {}).get("取数时间"),
+            "错误": score_err, "降级": (score or {}).get("降级") or [],
+        },
+        "机械打分明细": {
+            "明细": ((score or {}).get("机械分") or {}).get("明细") or [],
+            "原始行": (score or {}).get("原始行") or {},
+            "技术": (score or {}).get("技术") or {},
+            "基本面": (score or {}).get("基本面") or {},
+            "资金": (score or {}).get("资金") or {},
+            "否决汇总": (score or {}).get("否决汇总") or {},
+        },
+        "硬约束": cons, "约束校正": corrections, "约束提示": cons_notes,
         "研判": research, "复核": review, "机械校验": checks,
         "账户": account, "持仓": data["持仓"], "现价": price, "降级": hints,
         "note": "本计划由本地程序采集的数据 + 大模型生成，不构成投资建议。",
@@ -325,6 +378,8 @@ def _plan_one(log, ctl, doc, node, opts):
             "计划": rel(path), "方向": (plan_obj or {}).get("方向"),
             "置信度": (plan_obj or {}).get("置信度"),
             "一句话结论": (plan_obj or {}).get("一句话结论"),
+            "机械分": cons.get("机械分"), "档位": cons.get("档位"),
+            "亏损预算_元": cons.get("亏损预算_元"), "校正": len(corrections),
             "error": research.get("error"), "usage": research.get("usage") or {},
             "cost": (research.get("cost") or {}).get("人民币_估算")}
 

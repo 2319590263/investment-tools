@@ -157,6 +157,8 @@ def plan_items(payload):
                     "股数": raw.get("股数"), "金额_元": raw.get("金额_元"),
                     "失效条件": meaningful_failure(raw.get("失效条件"), rng, act),
                     "失效条件原文": raw.get("失效条件"),
+                    # 被硬约束 / 确定性规则作废的条目要如实标出来（交易流会写 作废原因）
+                    "作废": bool(raw.get("作废")), "作废原因": raw.get("作废原因"),
                     "无动作": is_noop(raw.get("动作"))})
     return out
 

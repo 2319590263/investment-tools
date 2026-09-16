@@ -148,7 +148,11 @@ def handle_get(handler, path, q):
             handler._err("缺少 id（交易流编号）或 code（标的代码）", 400)
             return True
         refresh = (q.get("refresh", ["0"])[0] or "0") in ("1", "true", "yes")
-        data, err = flowview.minutes(fid, code, refresh=refresh)
+        mode = (q.get("mode", ["minute"])[0] or "minute").strip().lower()
+        if mode not in ("minute", "day"):
+            handler._err("mode 只能是 minute 或 day", 400)
+            return True
+        data, err = flowview.minutes(fid, code, refresh=refresh, mode=mode)
         if err:
             handler._err(err, 404)
             return True

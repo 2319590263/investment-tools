@@ -637,6 +637,13 @@ input.inline-input:focus { outline: none; border-color: var(--accent); }
   border-radius: 6px; cursor: crosshair; }
 .fl-chart-tip { margin-top: 4px; font-size: 12px; }
 .fl-min-refresh { margin-left: 8px; }
+/* 行内图上方的「分时 / 日K（+ 根数）」按钮排 */
+.fl-chart-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 6px; }
+.fl-chart-bar .btn { width: auto; }
+.fl-chart-bar .muted { font-size: 12px; }
+/* 被硬约束作废的计划条目：整行压暗 + 划掉股数（别让人照着一条作废的计划下单） */
+.tk-void { opacity: .55; }
+.tk-void td { text-decoration: line-through; }
 .fl-chart-row td { padding-top: 6px; padding-bottom: 10px; }
 /* 分时图下方的操作按钮：横向一排（左对齐、自动换行），不再是原来的右侧竖排 */
 .fl-chart-row .fl-row-act { flex-direction: row; flex-wrap: wrap; gap: 6px; margin-top: 8px;

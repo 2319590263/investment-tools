@@ -560,6 +560,11 @@ def set_plan(node, payload, path, kind="首份计划", error=None):
         "一句话结论": plan.get("一句话结论"),
         "条目": track.plan_items(payload), "关键价位": report_levels(path),
         "错误": error or ((payload or {}).get("研判") or {}).get("error"),
+        # 机械打分定约束：三块一起挂到标的上（页面照它显示，不用再读产物）
+        "机械打分": (payload or {}).get("机械打分"),
+        "硬约束": (payload or {}).get("硬约束"),
+        "约束校正": (payload or {}).get("约束校正") or [],
+        "约束提示": (payload or {}).get("约束提示") or [],
     }
     re_meta = dict(node.get("计划重算") or {})
     re_meta["上次生成日"] = datetime.now().strftime("%Y-%m-%d")
