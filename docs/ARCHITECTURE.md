@@ -181,7 +181,8 @@ GET  /api/state /holdings /account /models /reports /report /history /symbols
      /market /market/forecast /plancheck /overview /alerts /watchlist /trash /pick /pick/list
      /kline（先读 data/history 缓存，没有就自动拉取：东财 push2his → 腾讯前复权兜底）
      /pick/boards /pick/industry /tracklist /track/all /track /blob
-     /models/default /models/profile /models/provider /ledger
+     /models/default /models/profile /models/provider
+     /ledger（交易台账只读视图：持仓页「交易明细」，含覆盖日期区间；台账由同步写入近一周成交）
      /flows /flow（?id=&code=）/flow/minutes（?id=&code=）
 POST /api/holdings /account /models /alerts/clear /trash/restore /trash/purge /pick/delete
      /models/default /models/profile /models/provider

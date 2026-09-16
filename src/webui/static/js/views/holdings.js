@@ -28,10 +28,12 @@ export async function loadLedger() {
       '<option value="' + esc(x["代码"]) + '"' + (x["代码"] === code ? " selected" : "") + ">" +
       esc((x["名称"] || x["代码"]) + "（" + x["笔数"] + " 笔）") + "</option>").join("");
     if (sel) sel.innerHTML = '<option value="">全部标的</option>' + opts;
+    const cover = d["覆盖"] ? ("覆盖 " + d["覆盖"]["起"] + " ~ " + d["覆盖"]["止"] + " ｜ ") : "";
     $("#ledger-meta").textContent = d["存在"]
-      ? ("共 " + d["总数"] + " 笔 ｜ " + d["标的数"] + " 只标的 ｜ 台账更新 " +
+      ? (cover + "共 " + d["总数"] + " 笔 ｜ " + d["标的数"] + " 只标的 ｜ 台账更新 " +
          (d["更新时间"] || "—") + " ｜ " + d["台账"])
-      : ("还没有台账文件：" + d["台账"] + "（用「同步同花顺」生成）");
+      : ("还没有台账文件：" + d["台账"] +
+         "（点右上「同步同花顺」拉近一周成交，自动去重）");
     const rows = d["行"] || [];
     table.innerHTML = "<thead><tr><th>日期</th><th>时间</th><th>代码</th><th>名称</th>" +
       "<th>方向</th><th class='num'>价格</th><th class='num'>数量</th><th class='num'>金额</th>" +

@@ -96,7 +96,7 @@ class TestNormalizeAndValidate(unittest.TestCase):
                                skip_trades=True, log=lambda _x: None,
                                now=datetime(2026, 9, 13, 15, 10, 0))
         self.assertEqual(result["成交数"], 0)
-        self.assertEqual(result["跳过"]["当日成交"], "手动跳过")
+        self.assertEqual(result["跳过"]["成交"], "手动跳过")
     def test_validation_rejects_positive_market_with_empty_positions(self):
         balance = fake_capture()["资金"]
         errors, _warnings = ths.validate(balance, [], [])

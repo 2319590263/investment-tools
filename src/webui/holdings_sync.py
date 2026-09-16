@@ -22,6 +22,7 @@ from glob import glob
 from typing import Any, Callable
 
 from . import holdings_ths
+from .holdings_trades import TRADE_WINDOW_DAYS
 from .paths import ACCOUNT_PATH, POOL_PATH, ROOT, atomic_write, read_text, rel, save_like
 
 
@@ -423,20 +424,23 @@ def run_sync(preview: bool = False, exe_path: str | None = None,
     context = _context(root)
     started = now or datetime.now()
     trading = is_trading_day(started, context["calendar"]) if trading_day is None else bool(trading_day)
-    fetch_trades = trading and not skip_trades
+    # 成交口径 = 近一周「历史成交」（含当日）：不再单独复制当日成交页；
+    # 凌晨/非交易日只拉当日会拿到空数据，历史成交能覆盖前面几天。
+    fetch_trades = not skip_trades
     if not preview and not os.path.isfile(context["account"]):
         raise holdings_ths.SyncError(
             "账户配置不存在：%s。请先运行 python main.py aiplan init-account" % rel(context["account"]),
             EXIT_WRITE_FAILED)
     if not preview and not os.path.isdir(os.path.dirname(context["pool"])):
         raise holdings_ths.SyncError("持仓目录不存在，未访问同花顺客户端", EXIT_WRITE_FAILED)
-    if not trading:
-        log("[OK] 本地交易日历判定为非交易日：跳过“当日成交”页")
-    elif skip_trades:
-        log("[OK] --no-trades：本次跳过“当日成交”页")
+    if skip_trades:
+        log("[OK] --no-trades：本次跳过成交页")
+    elif not trading:
+        log("[OK] 非交易日：仍会读「历史成交（近一周）」，所以不会像只拉当日那样空手")
     if capture_fn is None:
         ensure_dependencies()
-        log("[..] 正在读取同花顺资金和持仓%s…" % ("、当日成交" if fetch_trades else ""))
+        log("[..] 正在读取同花顺资金和持仓%s…"
+            % ("、近一周历史成交（按委托去重）" if fetch_trades else ""))
         captcha_handler = build_captcha_handler(context["captcha_root"], captcha_timeout, log,
                                                prompt=captcha_prompt)
         captured = holdings_ths.capture(exe_path, context["cache"], log,
@@ -466,17 +470,22 @@ def run_sync(preview: bool = False, exe_path: str | None = None,
         "预览": bool(preview),
         "抓取时间": captured.get("抓取时间") or started.strftime("%Y-%m-%d %H:%M:%S"),
         "交易日": trading,
-        "跳过": dict(captured.get("跳过") or {}, **({} if fetch_trades else {"当日成交": ("手动跳过" if skip_trades and trading else "非交易日")})),
+        "跳过": dict(captured.get("跳过") or {}, **({} if fetch_trades else {"成交": "手动跳过"})),
         "持仓数": len(positions),
         "可分析持仓数": sum(1 for row in positions if row.get("可纳入持仓文件", True) and holdings_ths.code6(row.get("证券代码"))),
         "成交数": len(trades),
+        "成交窗口": captured.get("成交窗口") or {},
         "总资产": round(total, 2),
         "可用资金": holdings_ths.to_num(balance.get("可用资金")),
         "告警": warnings,
         "写入": {},
     }
-    log("[OK] 抓取校验通过：持仓 %d 项（写入分析文件 %d 只），当日成交 %d 笔，总资产 %.2f 元"
-        % (len(positions), result["可分析持仓数"], len(trades), total))
+    window = result["成交窗口"] or {}
+    log("[OK] 抓取校验通过：持仓 %d 项（写入分析文件 %d 只），成交 %d 笔"
+        "（近 %s 天历史成交：读到 %s 行，去重后 %d），总资产 %.2f 元"
+        % (len(positions), result["可分析持仓数"], len(trades),
+           window.get("天数") or TRADE_WINDOW_DAYS, window.get("历史条数") or 0,
+           window.get("去重后", len(trades)), total))
     if preview:
         log("[OK] 预览完成，未写入持仓文件、账户配置、快照或交易台账")
         return result
@@ -560,11 +569,11 @@ def _emit_failure(message: str, code: int, json_mode: bool) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="从已登录的同花顺客户端只读同步资金、持仓与当日成交")
+    parser = argparse.ArgumentParser(description="从已登录的同花顺客户端只读同步资金、持仓与近一周成交")
     parser.add_argument("command", nargs="?", choices=("sync",), default="sync")
     parser.add_argument("--exe", metavar="PATH", help="xiadan.exe 路径；默认自动定位")
     parser.add_argument("--preview", action="store_true", help="只抓取和校验，不写任何文件")
-    parser.add_argument("--no-trades", action="store_true", help="本次跳过当日成交页，减少复制验证")
+    parser.add_argument("--no-trades", action="store_true", help="本次跳过历史成交页，减少复制验证")
     parser.add_argument("--captcha-timeout", type=int, default=CAPTCHA_TIMEOUT,
                         help="WebUI 等待人工填写验证码的秒数（默认 %d）" % CAPTCHA_TIMEOUT)
     parser.add_argument("--no-captcha-prompt", action="store_true",

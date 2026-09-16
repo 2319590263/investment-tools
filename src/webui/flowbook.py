@@ -694,9 +694,12 @@ def ledger_view(code=None, limit=LEDGER_VIEW_LIMIT):
     except (TypeError, ValueError):
         limit = LEDGER_VIEW_LIMIT
     total = len(rows)
+    days = sorted({str(r.get("日期") or "") for r in rows if str(r.get("日期") or "")})
     return {"行": rows[:limit], "总数": total, "显示": min(limit, total),
             "台账": rel(LEDGER_PATH), "存在": os.path.exists(LEDGER_PATH),
             "更新时间": time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(mtime)) if mtime else None,
             "标的数": len(summary),
             "标的": [summary[k] for k in sorted(summary, key=lambda x: (-summary[x]["笔数"], x or ""))],
-            "口径": "台账由「同步同花顺」写入 data/user/交易台账.md；这里只读不写"}
+            "覆盖": {"起": days[0], "止": days[-1]} if days else None,
+            "口径": "台账由「同步同花顺」写入 data/user/交易台账.md：每次同步拉**近一周成交**"
+                    "（当日成交 + 历史成交，按委托序号自动去重）；这里只读不写"}

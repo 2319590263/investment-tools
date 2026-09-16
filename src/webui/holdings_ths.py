@@ -2,7 +2,7 @@
 """同花顺下单程序只读适配层。
 
 只在独立 .venv-holdings 中导入 easytrader / pywinauto；主 WebUI 启动时不会加载这些
-第三方包。适配层不登录、不保存凭据、不调用任何交易接口，只读取资金、持仓和当日成交。
+第三方包。适配层不登录、不保存凭据、不调用任何交易接口，只读取资金、持仓和近一周成交。
 """
 
 from __future__ import annotations
@@ -12,6 +12,9 @@ import re
 import time
 from datetime import datetime
 from typing import Any, Callable, Iterable
+
+from .holdings_trades import (HISTORY_TRADE_MENUS, TRADE_WINDOW_DAYS, merge_trades,
+                              read_history_trades, trade_date_of)  # noqa: F401
 
 EXIT_CLIENT_NOT_RUNNING = 3
 EXIT_WINDOW_UNAVAILABLE = 4
@@ -214,7 +217,7 @@ def _direction(value: Any) -> str:
     return text
 
 def normalize_trades(raw: Any) -> list[dict]:
-    """把 easytrader 当日成交结果归一化并按委托标识去重。"""
+    """把 easytrader 成交页结果归一化并按委托标识去重（历史成交页同样用它）。"""
     out, seen = [], set()
     for row in _rows(raw):
         entrust_no = str(pick(row, KEYS_TRADES["entrust_no"]) or "").strip()
@@ -243,6 +246,7 @@ def normalize_trades(raw: Any) -> list[dict]:
             "交易市场": str(pick(row, KEYS_TRADES["market"]) or "").strip(),
         })
     return out
+
 
 def apply_position_ratios(positions: list[dict], balance: dict) -> None:
     total = to_num(balance.get("总资产"))
@@ -714,7 +718,12 @@ def _fetch_with_retry(exe_path: str, getter: Callable[[], Any], name: str,
 def capture(exe_path: str | None = None, cache_path: str | None = None,
             log: Callable[[str], None] | None = None, include_trades: bool = True,
             captcha_handler: Callable[[int, str], None] | None = None) -> dict:
-    """读取并归一化资金、持仓、当日成交；不负责写入业务文件。"""
+    """读取并归一化资金、持仓、**近 TRADE_WINDOW_DAYS 天成交**；不负责写入业务文件。
+
+    成交口径（用户口径）：只读「历史成交」（近一周，含当日），按委托去重后写台账——
+    不再单独复制「当日成交」页（少一次剪贴板复制 = 少一次验证码打断）；
+    凌晨/非交易日也不会像只拉当日那样拿到空数据。
+    """
     log = log or (lambda _text: None)
     exe = find_exe(exe_path, cache_path)
     if not exe:
@@ -733,10 +742,12 @@ def capture(exe_path: str | None = None, cache_path: str | None = None,
         raw_balance = _fetch_with_retry(exe, lambda: user.balance, "资金", False, log, "balance", captcha_handler)
         raw_positions = _fetch_with_retry(exe, lambda: user.position, "持仓", True, log, "position", captcha_handler)
         if include_trades:
-            raw_trades = _fetch_with_retry(exe, lambda: user.today_trades, "当日成交", True, log, "trades", captcha_handler)
+            # 只读「历史成交」（近一周）——用户口径：不再单独复制「当日成交」页，
+            # 少一次剪贴板复制就少一次验证码打断；历史成交按委托去重后写台账。
+            raw_history = read_history_trades(user, log)
         else:
-            raw_trades = []
-            log("[OK] 本次跳过“当日成交”页，避免无意义的复制验证")
+            raw_history = []
+            log("[OK] 本次跳过成交页，避免无意义的复制验证")
     except SyncError:
         active_now = captcha_windows()
         if active_now:
@@ -745,13 +756,15 @@ def capture(exe_path: str | None = None, cache_path: str | None = None,
         raise
     balance = normalize_balance(raw_balance, getattr(user, "main", None))
     positions = normalize_positions(raw_positions)
-    trades = normalize_trades(raw_trades)
+    trades, window = merge_trades([], normalize_trades(raw_history), code6=code6)
     apply_position_ratios(positions, balance)
     return {
         "客户端": {"路径": exe, "连接模式": mode},
         "资金": balance,
         "持仓": positions,
         "当日成交": trades,
+        "成交窗口": window,
+        "历史成交条数": len(normalize_trades(raw_history)),
         "抓取时间": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "跳过": {} if include_trades else {"当日成交": "已跳过"},
     }

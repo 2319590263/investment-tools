@@ -47,7 +47,7 @@ PACKAGE_MODULES = ("__init__.py", "__main__.py", "paths.py", "sources.py", "stor
                    "alerts.py", "trash.py", "track.py", "track_run.py", "trackview.py",
                    "flow.py", "flowbook.py", "flow_run.py", "flowview.py",
                    "webserver.py", "run_aiplan.py",
-                   "holdings_ths.py", "holdings_sync.py")
+                   "holdings_ths.py", "holdings_trades.py", "holdings_sync.py")
 JS_MODULES = ("main.js", "core/util.js", "core/api.js", "core/app.js", "core/poller.js",
               "core/mobile.js",
                   "ui/markdown.js", "ui/jsontree.js", "ui/modal.js", "ui/cards.js", "ui/kline.js",
