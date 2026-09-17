@@ -413,7 +413,9 @@ def save_market_read(payload):
     stamp = aiplan.now_local().strftime("%H%M%S")
     path = os.path.join(d, "%s.json" % stamp)
     atomic_write(path, body, newline="\n")
-    atomic_write(os.path.join(d, "latest_read.json"), body, newline="\n")
+    # 只有真拿到模型评分才推进指针：一次失败的尝试不该把卡片上上次的模型分抹掉
+    if (payload.get("json") or {}).get("模型评分") is not None:
+        atomic_write(os.path.join(d, "latest_read.json"), body, newline="\n")
     j = payload.get("json") or {}
     lines = ["# 大盘评分 · 模型解读（%s）" % (payload.get("generated_at") or ""),
              "",
