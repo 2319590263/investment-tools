@@ -1,86 +1,141 @@
-/* 大盘快照页与走势预测。 */
+/* 大盘快照页与大盘评分（机械 7 : 模型 3，阈值照《大盘评分逻辑.txt》）。 */
 import { api } from "../core/api.js";
-import { State, registerView } from "../core/app.js";
-import { $, EMPTY, chip, dirColor, esc, fmt, fmtPct, freshNote, has, kindClass, num, sleep, toast } from "../core/util.js";
-import { card, kv, listOrEmpty, pill, renderScenarioSummary } from "../ui/cards.js";
-import { sceneCards } from "../ui/kline.js";
+import { registerView } from "../core/app.js";
+import { $, EMPTY, chip, esc, fmt, fmtPct, freshNote, kindClass, num, sleep, toast } from "../core/util.js";
+import { card, kv } from "../ui/cards.js";
 
-export function fcProfilePicker() {
-  const profiles = (((State.state || {})["模型"]) || {}).profiles || [];
-  const def = (((State.state || {})["模型"]) || {})["默认_profile"] || "";
-  return '<select id="fc-profile" class="inline-select">' + profiles.map(p =>
-    '<option value="' + esc(p["名称"]) + '"' + (p["名称"] === def ? " selected" : "") + ">" +
-    esc(p["名称"]) + "</option>").join("") + "</select>";
+/* 批注 1：大盘评分卡（机械 7 : 模型 3）。机械分阈值照《大盘评分逻辑.txt》，模型分是盲评。 */
+export function marketScoreCard(block) {
+  const b = block || {};
+  const total = num(b["总分"]);
+  const mech = num(b["机械分"]);
+  const model = num(b["模型分"]);
+  const cls = total === null ? "" : (total >= 65 ? "up" : (total < 45 ? "down" : ""));
+  const dd = b["数据日期"] || {};
+  const actions = '<div class="fc-actions" style="margin-top:14px">' +
+    '<button class="btn ghost" id="mkt-score-run">重新计算</button>' +
+    '<button class="btn primary" id="mkt-read">' + (model === null ? "生成解读（含模型分）" : "重新生成解读") + "</button>" +
+    '<span class="muted" id="mkt-score-status"></span></div>' +
+    '<pre class="console" id="mkt-score-console" hidden></pre>' +
+    '<div class="fc-note">机械分免费（阈值照《大盘评分逻辑.txt》）；「生成解读」是 1 次真实模型调用，' +
+    '模型只看原始数据、盲评给一个 0-100 分，不参与机械计算。产物落 data/ai/market/read_*，不构成投资建议。</div>';
+  const dates = '<div class="muted" style="margin-top:10px;font-size:12.5px">数据日期：pan 快照 ' +
+    esc(dd["pan 交易日"] || "—") + " ｜ 指数日K " + esc(dd["指数日K 最新交易日"] || "—") +
+    " ｜ 中证 PE 序列截止 " + esc(dd["中证 PE 序列截止"] || "—") + " ｜ 本地历史 " +
+    (dd["本地历史天数"] == null ? "—" : dd["本地历史天数"]) + " 天 ｜ 算于 " +
+    esc(dd["评分计算时间"] || "—") + "</div>";
+
+  if (!(b["模块"] || []).length) {
+    return card("大盘评分",
+      '<div class="muted">还没有评分：' + esc(b["错误"] || b["一句话"] ||
+        "先抓一次大盘快照（右上角「抓大盘快照」），再点「重新计算」") + "</div>" + dates + actions);
+  }
+
+  let html = '<div class="gauge-row">' +
+    '<div class="gauge"><span class="k">总分（机械7 : 模型3）</span><span class="v ' + cls +
+    '" style="font-size:22px">' + (total === null ? "—" : fmt(total, 1)) + "</span></div>" +
+    '<div class="gauge"><span class="k">机械分</span><span class="v">' +
+    (mech === null ? "—" : fmt(mech, 1)) + "</span></div>" +
+    '<div class="gauge"><span class="k">模型分</span><span class="v ' + (model === null ? "muted" : "") + '">' +
+    (model === null ? "未生成" : fmt(model, 1)) + "</span></div>" +
+    '<div class="gauge"><span class="k">权重</span><span class="v" style="font-size:14px">' +
+    esc(b["权重"] || "—") + "</span></div>" +
+    '<div class="gauge"><span class="k">机械实得 / 可得</span><span class="v" style="font-size:15px">' +
+    fmt(b["机械实得"], 1) + " / " + fmt(b["机械可得"], 1) + "</span></div>" +
+    "</div>" + dates;
+
+  if (model === null) {
+    html += '<div class="hint" style="margin-top:10px">模型分还没生成：现在总分先按 100% 机械显示；' +
+      "点「生成解读」后自动变成 机械 7 : 模型 3。</div>";
+  } else if (b["分歧提示"]) {
+    html += '<div class="hint" style="margin-top:10px">' + esc(b["分歧提示"]) + "</div>";
+  }
+
+  /* 六个模块小计常驻 */
+  html += '<div class="sec-title" style="margin-top:16px">六个模块</div>' +
+    '<div class="table-wrap" style="max-height:none"><table class="tbl" id="mkt-score"><thead><tr>' +
+    "<th>模块</th><th class='num'>得分</th><th class='num'>可得</th><th class='num'>满分</th></tr></thead><tbody>";
+  (b["模块"] || []).forEach(g => {
+    html += "<tr><td><b>" + esc(g["模块"]) + "</b></td>" +
+      '<td class="num">' + fmt(g["得分"], 1) + "</td>" +
+      '<td class="num muted">' + fmt(g["可得"], 1) + "</td>" +
+      '<td class="num muted">' + fmt(g["满分"], 0) + "</td></tr>";
+  });
+  html += "</tbody></table></div>";
+
+  /* 逐条阈值明细：默认收起 */
+  html += '<details style="margin-top:12px"><summary style="cursor:pointer">逐条阈值与观测值（' +
+    (b["模块"] || []).reduce((n, g) => n + (g["指标"] || []).length, 0) +
+    ' 项，点开核对口径）</summary>' +
+    '<div class="table-wrap" style="max-height:none;margin-top:8px"><table class="tbl"><thead><tr>' +
+    "<th>指标</th><th class='num'>得分</th><th>观测值</th><th>阈值</th><th>来源</th></tr></thead><tbody>";
+  (b["模块"] || []).forEach(g => {
+    (g["指标"] || []).forEach(it => {
+      const note = it["无数据源"] ? '<span class="muted">无数据源</span>'
+        : (it["缺失原因"] ? '<span class="muted">缺失：' + esc(it["缺失原因"]) + "</span>" : "");
+      html += '<tr><td class="wrap"><b>' + esc(it["指标"]) + "</b><div class='muted' style='font-size:12px'>" +
+        esc(g["模块"]) + (it["无数据源"] ? " ｜ " + esc(it["无数据源"]) : "") + "</div></td>" +
+        '<td class="num">' + (it["得分"] === null ? '<span class="muted">—</span>' :
+          fmt(it["得分"], 2) + '<span class="muted">/' + fmt(it["满分"], 0) + "</span>") + "</td>" +
+        '<td class="wrap mono" style="font-size:12.5px">' + esc(it["观测值"] || "—") + "</td>" +
+        '<td class="wrap muted" style="font-size:12.5px">' + esc(it["阈值"] || "") + "</td>" +
+        '<td class="wrap muted" style="font-size:12px">' + esc(it["来源"] || "—") +
+        (it["数据日期"] ? " ｜ " + esc(it["数据日期"]) : "") + "</td></tr>";
+    });
+  });
+  html += "</tbody></table></div></details>";
+
+  if ((b["无数据源"] || []).length) {
+    html += '<div class="sec-title" style="margin-top:14px">无数据源（已从分母剔除，不记 0 分）</div>' +
+      b["无数据源"].map(x => '<div class="muted">· ' + esc(x["指标"]) + "（" + fmt(x["满分"], 0) +
+        " 分）：" + esc(x["原因"]) + "</div>").join("");
+  }
+  if ((b["缺失"] || []).length) {
+    html += '<div class="sec-title" style="margin-top:12px">本次缺失（只从分母剔除）</div>' +
+      b["缺失"].map(x => '<div class="muted">· ' + esc(x["指标"]) + "：" + esc(x["原因"]) + "</div>").join("");
+  }
+  html += '<div class="muted" style="margin-top:10px;font-size:12.5px">' + esc(b["口径"] || "") + "</div>";
+  html += actions;
+  html += marketReadBlock(b);
+  return card("大盘评分", html);
 }
 
-export function marketForecastCard(res) {
-  const fc = (res || {})["forecast"];
-  const j = ((fc || {}).json) || {};
-  const has = fc && Object.keys(j).length > 0;
-  const actions = '<div class="fc-actions" style="margin-top:14px">' + fcProfilePicker() +
-    '<button class="btn primary" id="fc-run">' + (has ? "重新生成预测" : "生成大盘走势预测") + "</button>" +
-    '<span class="muted" id="fc-status"></span></div>' +
-    '<pre class="console" id="fc-console" hidden></pre>' +
-    '<div class="fc-note">这是一次真实的模型调用（产生 token 费用），默认用所选 profile 的「研判档」；' +
-    '结果落在 data/ai/market/，不会写进报告的 plan_log。模型生成，不构成投资建议。</div>';
-
-  if (!has) {
-    return card("大盘走势预测",
-      '<div class="muted">还没有生成。点下面的按钮，用当前 pan 快照调一次模型，给出方向、情景树、关键点位与风险。</div>' + actions);
+/* 模型解读（精简字段）：一句话结论 / 风险与应对 / 操作建议 / 数据依赖 */
+export function marketReadBlock(block) {
+  const info = (block || {})["读取解读"];
+  const j = (block || {})["模型解读"];
+  if (!j) {
+    return info && info["错误"]
+      ? '<div class="fail" style="margin-top:10px">上次生成解读失败：' + esc(info["错误"]) + "</div>"
+      : "";
   }
-
-  const score = num(j["多空评分"]);
-  const scoreCls = score === null ? dirColor(j["方向"]) : (score > 0 ? "up" : (score < 0 ? "down" : ""));
-  let html = '<div class="gauge-row">' +
-    '<div class="gauge"><span class="k">方向</span><span class="v ' + dirColor(j["方向"]) + '">' + esc(j["方向"] || "—") + "</span></div>" +
-    '<div class="gauge"><span class="k">置信度</span><span class="v">' + (j["置信度"] == null ? "—" : j["置信度"]) + "</span></div>" +
-    '<div class="gauge"><span class="k">多空评分</span><span class="v ' + scoreCls + '">' + (score === null ? "—" : score) + "</span></div>" +
-    '<div class="gauge"><span class="k">时间窗</span><span class="v" style="font-size:14px">' + esc(j["时间窗"] || "—") + "</span></div>" +
-    '<div class="gauge"><span class="k">生成时间</span><span class="v" style="font-size:12.5px">' + esc(fc.generated_at || "—") + "</span></div>" +
-    '<div class="gauge"><span class="k">模型</span><span class="v" style="font-size:12.5px">' + esc((fc.provider || "") + " / " + (fc.model || "")) + "</span></div>" +
-    "</div>" +
-    '<div class="hero-quote" style="margin-top:12px">' + esc(j["一句话结论"] || "（模型未给出结论）") + "</div>";
-
-  const scenes = j["情景树"];
-  if (Array.isArray(scenes) && scenes.length) {
-    html += '<div style="margin-top:14px">' +
-      renderScenarioSummary({ "情景树": scenes, "多空评分": j["多空评分"] }) + sceneCards(scenes) + "</div>";
+  let html = '<div class="sec-title" style="margin-top:16px">模型解读' +
+    (info && info["模型"] ? '<span class="muted" style="font-weight:400;font-size:12px">' +
+      esc(info["模型"]) + " ｜ " + esc(info["生成时间"] || "") + "</span>" : "") + "</div>" +
+    '<div class="hero-quote">' + esc(j["一句话结论"] || "（模型未给结论）") + "</div>";
+  if (j["评分理由"]) {
+    html += '<div class="muted" style="margin-top:6px">模型评分 ' + fmt(block["模型分"], 1) +
+      " ｜ 理由：" + esc(j["评分理由"]) + "</div>";
   }
-
-  const kp = j["关键价位"] || {};
-  const pills = [];
-  (kp["支撑"] || []).forEach(x => pills.push(pill(x["价位"], x["依据"], "up")));
-  if (kp["止损价"] != null) pills.push(pill(kp["止损价"], "止损价", "stop"));
-  (kp["压力"] || []).forEach(x => pills.push(pill(x["价位"], x["依据"], "down")));
-  (kp["目标位"] || []).forEach(x => pills.push(pill(x["价位"], x["依据"], "target")));
-  if (pills.length) html += '<div class="sec-title" style="margin-top:16px">关键点位</div><div>' + pills.join("") + "</div>";
-
-  const secs = j["关注板块"];
-  if (Array.isArray(secs) && secs.length) {
-    html += '<div class="sec-title" style="margin-top:14px">关注板块</div>' +
-      '<div class="table-wrap" style="max-height:none"><table class="tbl"><thead><tr><th>板块</th><th>方向</th><th>依据</th></tr></thead><tbody>' +
-      secs.map(x => "<tr><td><b>" + esc(x["板块"] || "") + '</b></td><td class="' +
-        (String(x["方向"] || "").indexOf("多") >= 0 ? "up" : "down") + '">' + esc(x["方向"] || "—") +
-        '</td><td class="wrap muted">' + esc(x["依据"] || "") + "</td></tr>").join("") +
-      "</tbody></table></div>";
-  }
-
-  const risks = j["风险"];
-  if (Array.isArray(risks) && risks.length) {
-    html += '<div class="sec-title" style="margin-top:14px">风险与应对</div>' +
-      '<div class="table-wrap" style="max-height:none"><table class="tbl"><thead><tr><th>风险</th><th>监控指标</th><th>应对</th></tr></thead><tbody>' +
+  const risks = j["风险与应对"] || [];
+  if (risks.length) {
+    html += '<div class="table-wrap" style="max-height:none;margin-top:10px"><table class="tbl">' +
+      "<thead><tr><th>风险</th><th>监控指标</th><th>应对</th></tr></thead><tbody>" +
       risks.map(x => '<tr><td class="wrap"><b>' + esc(x["风险"] || "") + '</b></td><td class="wrap muted">' +
         esc(x["监控指标"] || "—") + '</td><td class="wrap">' + esc(x["应对"] || "—") + "</td></tr>").join("") +
       "</tbody></table></div>";
   }
-
-  const dep = j["数据依赖"];
-  if (dep) {
-    html += '<div class="sec-title" style="margin-top:14px">数据依赖</div>' + listOrEmpty(dep["降级项"]) +
-      (dep["缺失导致的不确定性"] ? '<div class="muted" style="margin-top:6px">' + esc(dep["缺失导致的不确定性"]) + "</div>" : "");
+  const acts = j["操作建议"] || [];
+  if (acts.length) {
+    html += '<div class="sec-title" style="margin-top:12px">操作建议</div>' +
+      acts.map(a => '<div class="muted">· ' + esc(a) + "</div>").join("");
   }
-  html += actions;
-  return card("大盘走势预测", html);
+  const deps = j["数据依赖"] || [];
+  if (deps.length) {
+    html += '<div class="sec-title" style="margin-top:12px">数据依赖</div>' +
+      deps.map(a => '<div class="muted">· ' + esc(a) + "</div>").join("");
+  }
+  return html;
 }
 
 /* 批注 5：四档打法推荐（超短线 / 短线 / 中线 / 长线 各一只）。
@@ -173,22 +228,18 @@ export async function runPanJob() {
 }
 
 
-export async function runMarketForecast() {
-  const btn = $("#fc-run");
-  const st = $("#fc-status");
-  const con = $("#fc-console");
-  if (!btn) return;
-  btn.disabled = true;
+/* 批注 1：跑一个评分相关任务（kind=mkt_score 全量重算 / kind=mkt_read 模型解读），把日志贴进控制台。 */
+async function runScoreJob(kind, body, btn, done) {
+  const st = $("#mkt-score-status");
+  const con = $("#mkt-score-console");
+  if (btn) btn.disabled = true;
   if (con) { con.hidden = false; con.dataset.clean = "1"; con.innerHTML = '<span class="l-dim">正在准备 …</span>'; }
   if (st) st.textContent = "运行中 …";
   try {
-    const res = await api("/api/jobs", {
-      method: "POST",
-      body: JSON.stringify({ kind: "market", profile: ($("#fc-profile") || {}).value || "" }),
-    });
+    const res = await api("/api/jobs", { method: "POST", body: JSON.stringify(body) });
     if (!res.ok) throw new Error(res.error || "启动失败");
     let from = 0, guard = 0;
-    while (guard++ < 600) {
+    while (guard++ < 2000) {
       const j = await api("/api/jobs/" + res.id + "?from=" + from);
       (j.lines || []).forEach(l => {
         const d = document.createElement("div");
@@ -199,31 +250,45 @@ export async function runMarketForecast() {
         else if (t.indexOf("[FAIL]") === 0) cls = "l-fail";
         else if (t.indexOf("[..]") === 0) cls = "l-stage";
         d.innerHTML = '<span class="' + cls + '">' + esc(l.text) + "</span>";
-        con.appendChild(d);
-        con.scrollTop = con.scrollHeight;
+        if (con) { con.appendChild(d); con.scrollTop = con.scrollHeight; }
       });
       from = j.next;
       if (j.status !== "running") {
-        btn.disabled = false;
+        if (btn) btn.disabled = false;
+        const out = j.result || {};
         if (j.status === "done") {
           if (st) st.textContent = "完成，用时 " + j.elapsed + "s";
-          toast("大盘预测已生成", "ok");
-          loadMarket();
+          toast(done(out), out["error"] ? "warn" : "ok");
+          await loadMarket();
         } else {
           if (st) st.textContent = "失败（退出码 " + j.exit_code + "）";
-          toast("大盘预测失败", "bad");
+          toast("任务失败：看日志里 [FAIL] 一行", "bad");
         }
         return;
       }
       await sleep(900);
     }
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
     if (st) st.textContent = "超时";
   } catch (e) {
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
     if (st) st.textContent = "失败：" + e.message;
     toast(e.message, "bad");
   }
+}
+
+
+/* 「重新计算」：全量机械评分（含宽度样本与全市场汇总），零成本。 */
+export async function runMktScore() {
+  await runScoreJob("mkt_score", { kind: "mkt_score", full: 1, refresh: 1 },
+                    $("#mkt-score-run"), out => "机械分已重算：" + fmt(out["机械分"], 1));
+}
+
+
+/* 「生成解读」：1 次模型调用（盲评给分 + 精简解读）。 */
+export async function runMktRead() {
+  await runScoreJob("mkt_read", { kind: "mkt_read" }, $("#mkt-read"),
+                    out => out["error"] ? ("解读失败：" + out["error"]) : "解读已生成");
 }
 
 export async function loadMarket() {
@@ -251,8 +316,7 @@ export async function loadMarket() {
   }
   const dd = doc.data || {};
   const parts = [];
-  const fcRes = await api("/api/market/forecast").catch(() => null);
-  parts.push(marketForecastCard(fcRes));
+  parts.push(marketScoreCard(m["大盘评分"]));
   parts.push(stylePicksCard(m["荐股四档"]));
 
   const idx = (dd.indices_volume || {})["指数_同花顺"] || (dd.indices_volume || {})["指数_东财"] || [];
@@ -373,8 +437,10 @@ export async function loadMarket() {
   }
 
   body.innerHTML = parts.join("") || EMPTY;
-  const fcBtn = $("#fc-run");
-  if (fcBtn) fcBtn.addEventListener("click", runMarketForecast);
+  const scoreBtn = $("#mkt-score-run");
+  if (scoreBtn) scoreBtn.addEventListener("click", runMktScore);
+  const readBtn = $("#mkt-read");
+  if (readBtn) readBtn.addEventListener("click", runMktRead);
 }
 
 export function flowTable(title, rows, cls) {

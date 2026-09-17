@@ -310,13 +310,16 @@ def _plan_one(log, ctl, doc, node, opts):
                        "执行摘要": track.exec_summary(flow_store.exec_record(node)),
                        "需要执行记录": False, "说明": None},
             "机械参考": mech, "背景": bg}
+    from . import mktscore                  # 放函数里：避免 mktscore → mktdata → pick 的导入环
+    front = [("交易流状态（成交与盈亏，权威口径）",
+              flow_state_lines(doc, node, price, brief.get("来源"), brief.get("时间"))),
+             ("机械打分（100分制，量化底座）", flowplan.score_lines(score, cons)),
+             ("硬约束（不可越界）", flowplan.constraint_lines(cons))]
+    market_line = mktscore.fact_block()
+    if market_line:
+        front.append(("大盘评分（机械 7 : 模型 3）", market_line))
     fact = track.factpack_sections(data, track_run.clamp_chars((opts or {}).get("max_chars")),
-                                   front=[("交易流状态（成交与盈亏，权威口径）",
-                                           flow_state_lines(doc, node, price, brief.get("来源"),
-                                                            brief.get("时间"))),
-                                          ("机械打分（100分制，量化底座）",
-                                           flowplan.score_lines(score, cons)),
-                                          ("硬约束（不可越界）", flowplan.constraint_lines(cons))])
+                                   front=front)
     log("    事实包 %s 字符（%d 章节%s）"
         % (fact["字符数"], len(fact["章节"]),
            "，裁剪 " + "、".join(fact["裁剪"]) if fact["裁剪"] else ""))
@@ -498,6 +501,10 @@ def check_factpack(doc, node, news, bg, brief, note, s3_path, s3_date, price, ca
     if plan.get("错误"):
         plan_lines.append("- 上次生成计划时的错误：%s" % plan["错误"])
     sections.append(("当前交易计划原文", "\n".join(plan_lines)))
+    from . import mktscore                  # 放函数里：避免导入环
+    market_line = mktscore.fact_block()
+    if market_line:
+        sections.append(("大盘评分（机械 7 : 模型 3）", market_line))
     sections.append(("消息面（stock3d）", _news_text(news, s3_path, s3_date)))
     bg = bg or {}
     if bg.get("个股量价与形态"):

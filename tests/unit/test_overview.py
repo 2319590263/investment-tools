@@ -278,6 +278,10 @@ class TestBuildOverview(Fixture):
                 mock.patch.object(self.ov, "list_reports", return_value=reports), \
                 mock.patch.object(self.ov, "session_of", return_value=session), \
                 mock.patch.object(self.ov, "report_levels", return_value=levels), \
+                mock.patch.object(self.ov.track, "merged_plan_items", return_value=[]), \
+                mock.patch.object(self.ov.flow, "list_flows", return_value=[]), \
+                mock.patch.object(self.ov.alerts_store, "ALERTS_PATH",
+                                  os.path.join(self.tmp, "alerts.jsonl")), \
                 mock.patch.object(self.ov.quotes, "fetch_quotes", return_value=(quote, [])), \
                 mock.patch.object(self.ov.quotes, "fetch_minutes", return_value=minute):
             live = self.ov.build_overview(refresh=True)
@@ -305,6 +309,8 @@ class TestBuildOverview(Fixture):
                 mock.patch.object(self.ov, "list_reports", return_value=reports), \
                 mock.patch.object(self.ov, "session_of", return_value=session), \
                 mock.patch.object(self.ov, "report_levels", return_value=levels), \
+                mock.patch.object(self.ov.track, "merged_plan_items", return_value=[]), \
+                mock.patch.object(self.ov.flow, "list_flows", return_value=[]), \
                 mock.patch.object(self.ov.quotes, "fetch_quotes", return_value=(quote, [])), \
                 mock.patch.object(self.ov.quotes, "fetch_minutes", return_value=None):
             first = self.ov.build_overview(refresh=True)

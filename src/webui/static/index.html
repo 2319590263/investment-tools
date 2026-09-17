@@ -502,8 +502,9 @@
         <div class="toolbar">
           <span class="muted" id="market-src"></span>
           <div class="spacer"></div>
-          <label class="sw"><input type="checkbox" id="pan-with-pick" checked /> 同时荐股
-            <span class="muted">（超短/短/中/长各一只）</span></label>
+          <label class="sw" title="勾上后同一个任务里再跑一轮荐股：与「荐股」页同一条链路（全大盘扫描 → 机械打分 → 前 150 只交模型 → 30 只推荐榜），本页按打法各取一只；会花模型钱">
+            <input type="checkbox" id="pan-with-pick" checked /> 同时荐股
+            <span class="muted">（超短/短/中/长各一只 · 与荐股页同一条链路）</span></label>
           <button class="btn ghost" id="btn-pan-run"
                   title="跑一次 pan.py post；勾了「同时荐股」就顺带跑一轮全大盘荐股（会花模型钱）">抓大盘快照</button>
           <span class="muted" id="pan-run-state"></span>

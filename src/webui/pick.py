@@ -231,6 +231,11 @@ def _pick_factpack(payload, keep):
                                   for k, v in (scan.get("排除统计") or {}).items()) or "无"),
          "- 说明：候选池按成交额降序取前 %s 只；本地打分结果不提供给模型，"
          "模型只依据下面的原始数据自行判断。" % (payload.get("扫描参数") or {}).get("候选池上限")]
+    from . import mktscore                  # 放函数里：避免 pick → mktscore → mktdata → pick 的导入环
+    market_line = mktscore.fact_block()
+    if market_line:
+        L.append("")
+        L.append(market_line)
     L.append("\n## 0 市场环境（模块1 原始数据）")
     L.append("- 10 年期国债收益率：%s%% ｜ 近5日日均全市场成交额：%s 亿 ｜ 近5日日均涨停家数：%s 家"
              % (env.get("bond10y"), env.get("amount5"), env.get("limitup5")))

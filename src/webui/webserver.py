@@ -23,9 +23,10 @@ from .archive import delete_pick, delete_plan_log, delete_report, latest_pick_bu
 from . import alerts as alerts_store
 from . import flowapi
 from .holdings_sync import CAPTCHA_ROOT, captcha_image, holdings_python, install_hint, submit_captcha_answer
-from .jobs import (JOBS, build_check_argv, build_run_argv, run_batch, start_pan_job)
+from .jobs import (JOBS, build_check_argv, build_run_argv, run_batch, start_market_job,
+                   start_pan_job)
 from .market import (build_market, build_state, build_symbols, kline_bundle,
-                     latest_market_forecast, run_market_forecast)
+                     latest_market_forecast, market_score_bundle, run_market_forecast)
 from .overview import build_overview
 from .flowbook import ledger_view
 from .freshness import purge_stale
@@ -36,7 +37,7 @@ from .plancheck import plancheck_bundle, run_plan_check
 from .store import (load_account_bundle, load_holdings_bundle, load_models_bundle,
                     load_tracklist, load_watchlist, tracklist_add, tracklist_import_watchlist,
                     tracklist_remove, save_profile, save_provider, set_default_profile,
-                    watchlist_add, watchlist_remove)
+                    validate_config_text, watchlist_add, watchlist_remove)
 from .track import delete_plan as delete_track_plan
 from .track import exec_summary as track_exec_summary
 from .track import save_exec as save_track_exec
@@ -256,6 +257,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(load_models_bundle())
         if path == "/api/market":
             return self._json(build_market())
+        if path == "/api/market/score":
+            # 批注 1：大盘评分（机械 7 : 模型 3）；refresh=1 强制重算（含指数日K）
+            refresh = (q.get("refresh", ["0"])[0] or "0") in ("1", "true", "yes")
+            try:
+                return self._json(market_score_bundle(refresh))
+            except ValueError as e:
+                return self._err(str(e), 404)
         if path == "/api/reports":
             prune = prune_reports()          # 每个标的只留最新一份（惰性、60 秒节流）
             prune.pop("明细", None)
@@ -589,6 +597,10 @@ class Handler(BaseHTTPRequestHandler):
                 # body.pick=true → 同一任务里顺带跑一轮荐股（批注 5），逻辑在 jobs.start_pan_job
                 job = start_pan_job(body)
                 return self._json({"ok": True, "id": job["id"], "命令": job["命令"], "清理": fresh})
+            elif kind in ("mkt_score", "mkt_read"):
+                # 批注 1：大盘评分重算（mkt_score，机械、零成本）与模型盲评解读（mkt_read，1 次调用）
+                job = start_market_job(kind, body)
+                return self._json({"ok": True, "id": job["id"], "命令": job["命令"], "清理": fresh})
             elif kind == "pick":
                 opts = pick_param(body)
                 if opts["model_top"] > opts["pool_size"]:
@@ -663,23 +675,9 @@ class Handler(BaseHTTPRequestHandler):
         return flowapi.start_job(kind, body)
 
     def _save_json_config(self, body, path, loader):
-        text = body.get("text")
-        if not isinstance(text, str):
-            return self._err("缺少 text")
-        try:
-            parsed = json.loads(text)
-        except ValueError as e:
-            return self._err("不是合法 JSON，未写入：%s" % e)
-        if not isinstance(parsed, dict):
-            return self._err("顶层必须是 JSON 对象")
-        if path == MODELS_PATH:
-            if not isinstance(parsed.get("providers"), list) or not parsed.get("providers"):
-                return self._err("models.providers 不能为空")
-            if not isinstance(parsed.get("profiles"), dict) or not parsed.get("profiles"):
-                return self._err("models.profiles 不能为空")
-        if path == ACCOUNT_PATH:
-            if not num(parsed.get("总资金")):
-                return self._err("「总资金」必须填写且大于 0")
+        parsed, err = validate_config_text(body.get("text"), path)
+        if err:
+            return self._err(err)
         written, bkp = save_like(path, json.dumps(parsed, ensure_ascii=False, indent=1))
         return self._json({"ok": True, "已写入": written,
                            "备份": rel(bkp) if bkp else None, "配置": loader()})

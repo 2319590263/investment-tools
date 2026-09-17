@@ -434,6 +434,26 @@ if (!(poolRows > 0)) failed++;
 /* ---- 大盘快照页：批注 5 的四档打法推荐（超短 / 短 / 中 / 长 各一只） ---- */
 await gotoView("market");
 await page.waitForSelector("#market-body .card", { timeout: 25000 }).catch(() => {});
+/* ---- 批注 1：大盘评分（机械 7 : 模型 3），旧「大盘走势预测」必须下线 ---- */
+const scoreCard = await page.locator("#mkt-score").count();
+console.log(`${scoreCard > 0 ? "PASS" : "FAIL"}  大盘评分卡有六模块小计表（#mkt-score）`);
+if (!scoreCard) failed++;
+if (scoreCard) {
+  const gauges = await page.locator("#market-body .card").first().innerText().catch(() => "");
+  const threeOk = /总分/.test(gauges) && /机械分/.test(gauges) && /模型分/.test(gauges);
+  console.log(`${threeOk ? "PASS" : "FAIL"}  评分卡并列显示总分 / 机械分 / 模型分`);
+  if (!threeOk) failed++;
+  const details = await page.locator("#market-body details").count();
+  const openAttr = await page.locator("#market-body details[open]").count().catch(() => 0);
+  console.log(`${details > 0 && openAttr === 0 ? "PASS" : "FAIL"}  逐条阈值明细默认收起（可展开）`);
+  if (!(details > 0 && openAttr === 0)) failed++;
+  const readBtn = await page.locator("#mkt-read").count();
+  console.log(`${readBtn > 0 ? "PASS" : "FAIL"}  有「生成解读」按钮（#mkt-read，会花模型钱，脚本不点）`);
+  if (!readBtn) failed++;
+  const legacy = await page.locator("#market-body").innerText().catch(() => "");
+  console.log(`${!/大盘走势预测/.test(legacy) ? "PASS" : "FAIL"}  旧「大盘走势预测」卡已下线`);
+  if (/大盘走势预测/.test(legacy)) failed++;
+}
 const styleTable = await page.locator("#style-picks").count();
 console.log(`${styleTable > 0 ? "PASS" : "FAIL"}  大盘快照页有「打法推荐」表（#style-picks）`);
 if (!styleTable) failed++;

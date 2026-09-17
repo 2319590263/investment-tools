@@ -22,6 +22,7 @@ import urllib.request
 ENDPOINTS = [
     "/api/state", "/api/holdings", "/api/account", "/api/models", "/api/reports",
     "/api/report", "/api/history", "/api/symbols", "/api/market", "/api/market/forecast",
+    "/api/market/score",
     "/api/kline?code=002463.SZ&limit=60", "/api/watchlist", "/api/trash",
     "/api/pick", "/api/pick/list", "/api/pick/boards",
     "/api/plancheck",

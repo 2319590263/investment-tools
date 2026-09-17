@@ -346,6 +346,30 @@ def start_pan_job(body):
                       func=lambda log, ctl: run_pan_and_pick(log, ctl, opts))
 
 
+def start_market_job(kind, body):
+    """批注 1 的大盘评分任务：
+
+    · kind="mkt_score"：机械评分（全量/快速版），不调模型、零成本；
+    · kind="mkt_read" ：模型盲评（0-100 分）+ 精简解读，1 次模型调用。
+    """
+    body = body or {}
+    from .market import run_market_read, run_market_score     # 放函数里：避免导入环
+    if kind == "mkt_score":
+        full = str(body.get("full", "1")).strip() not in ("0", "false", "False")
+        refresh = bool(body.get("refresh"))
+        meta = {"label": "大盘评分", "全量": full, "强制重取": refresh}
+        return JOBS.start(kind, [], meta,
+                          label="计算大盘评分（%s%s）"
+                                % ("全量" if full else "快速版", "，强制重取" if refresh else ""),
+                          func=lambda log, ctl: run_market_score(log, ctl, full, refresh))
+    prof = body.get("profile")
+    meta = {"label": "大盘评分解读", "profile": prof, "model_pro": body.get("model_pro")}
+    return JOBS.start(kind, [], meta, label="生成大盘评分解读（1 次模型调用）",
+                      func=lambda log, ctl: run_market_read(
+                          log, profile=prof, model_pro=body.get("model_pro"),
+                          api_base=body.get("api_base"), api_key=body.get("api_key")))
+
+
 def build_run_argv(body):
     phase = (body.get("phase") or "post").strip()
     if phase not in PHASES:

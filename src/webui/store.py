@@ -180,6 +180,27 @@ def tracklist_import_watchlist():
     return added, items
 
 
+def validate_config_text(text, path):
+    """页面直接改 JSON 时的校验：返回 (parsed, 错误文本)。模型配置与账户配置各有必填项。"""
+    if not isinstance(text, str):
+        return None, "缺少 text"
+    try:
+        parsed = json.loads(text)
+    except ValueError as e:
+        return None, "不是合法 JSON，未写入：%s" % e
+    if not isinstance(parsed, dict):
+        return None, "顶层必须是 JSON 对象"
+    if path == MODELS_PATH:
+        if not isinstance(parsed.get("providers"), list) or not parsed.get("providers"):
+            return None, "models.providers 不能为空"
+        if not isinstance(parsed.get("profiles"), dict) or not parsed.get("profiles"):
+            return None, "models.profiles 不能为空"
+    if path == ACCOUNT_PATH:
+        if not num(parsed.get("总资金")):
+            return None, "「总资金」必须填写且大于 0"
+    return parsed, None
+
+
 def load_models_bundle():
     """读模型配置（含默认 profile、按时间段 profile、providers 掩码）。"""
     text = read_text(MODELS_PATH)

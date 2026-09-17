@@ -18,7 +18,7 @@ GET_KEYS = {
     "/api/reports": ("items",),
     "/api/history": ("plan_log", "reports"),
     "/api/symbols": ("items",),
-    "/api/market": ("pan", "stock3d", "荐股四档"),
+    "/api/market": ("pan", "stock3d", "荐股四档", "大盘评分"),
     "/api/market/forecast": ("forecast", "路径", "mtime"),
     "/api/trash": ("items", "目录", "过期天数", "上次清理"),
     "/api/pick": ("json路径", "md", "json", "mtime"),
@@ -167,6 +167,68 @@ class TestApiSmoke(unittest.TestCase):
                 continue
             for field in ("代码", "名称", "打法", "模型分", "机械分", "评级", "理由"):
                 self.assertIn(field, row["行"])
+
+    def test_market_score_block(self):
+        """批注 1：大盘评分——6 模块 27 分项齐全，机械7:模型3，无数据源固定 7 项。"""
+        status, body = self.server.get("/api/market")
+        self.assertEqual(status, 200, body)
+        blk = body["大盘评分"]
+        self.assertTrue(blk, "有 pan 快照时应给出大盘评分")
+        for field in ("总分", "机械分", "机械实得", "机械可得", "模型分", "权重", "模块",
+                      "缺失", "无数据源", "口径", "数据日期"):
+            self.assertIn(field, blk)
+        self.assertEqual([g["模块"] for g in blk["模块"]],
+                         ["模块1 估值水平", "模块2 货币与宏观流动性", "模块3 场内资金面",
+                          "模块4 技术趋势结构", "模块5 市场情绪温度", "模块6 外围环境传导"])
+        items = [i for g in blk["模块"] for i in g["指标"]]
+        self.assertEqual(len(items), 27)
+        self.assertEqual(sum(i["满分"] for i in items), 100.0)
+        self.assertEqual(len(blk["无数据源"]), 7)
+        for item in items:
+            for field in ("指标", "满分", "得分", "观测值", "阈值"):
+                self.assertIn(field, item)
+        if blk["机械分"] is not None:
+            self.assertEqual(blk["机械分"],
+                             round(blk["机械实得"] / blk["机械可得"] * 100, 1))
+        if blk["模型分"] is None:                  # 没生成模型分 → 总分暂按 100% 机械
+            self.assertEqual(blk["总分"], blk["机械分"])
+            self.assertIn("暂 100% 机械", blk["权重"])
+        else:
+            self.assertEqual(blk["总分"],
+                             round(blk["机械分"] * 0.7 + blk["模型分"] * 0.3, 1))
+
+    def test_market_score_endpoint(self):
+        """/api/market/score：与 /api/market 里那一块同源（走当天缓存，不重复取数）。"""
+        status, body = self.server.get("/api/market/score")
+        if status == 404:
+            self.skipTest("没有 pan 快照")
+        self.assertEqual(status, 200, body)
+        self.assertIn("模块", body)
+        self.assertIn("数据日期", body)
+
+    def test_market_read_job_records_failure(self):
+        """mkt_read 打不通模型时：产物照常落盘、无模型分、error 有值（零成本）。"""
+        import os
+        import time
+        from _common import DATA
+
+        status, body = self.server.post("/api/jobs", {
+            "kind": "mkt_read", "api_base": "http://127.0.0.1:1", "api_key": "fake"})
+        self.assertEqual(status, 200, body)
+        job_id = body["id"]
+        job = {}
+        for _ in range(180):
+            _s, job = self.server.get("/api/jobs/%s" % job_id)
+            if job.get("status") != "running":
+                break
+            time.sleep(1)
+        self.assertNotEqual(job.get("status"), "running", job)
+        out = job.get("result") or {}
+        self.assertTrue(out.get("error"), "模型打不通时必须有 error：%s" % out)
+        path = out.get("read_path") or ""
+        self.assertTrue(path and os.path.isfile(path), "产物必须照常落盘：%s" % path)
+        self.assertTrue(os.path.abspath(path).startswith(os.path.join(DATA, "ai")),
+                        "产物要落在 data/ai 下：%s" % path)
 
     def test_overview_pick_rank(self):
         """总控台荐股榜：结构完整、按模型评分降序；没有产物也要能读（不联网、不写盘）。"""

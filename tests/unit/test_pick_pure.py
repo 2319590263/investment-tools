@@ -94,7 +94,14 @@ class TestFactpack(unittest.TestCase):
         txt = self.pick.pick_factpack(self._payload(), 40000)
         self.assertIn("600967", txt)
         self.assertIn("半导体", txt)
-        self.assertNotIn("机械分", txt, "机械分不能进事实包（避免锚定）")
+        # 个股机械分不能进事实包（避免锚定模型）；大盘评分块是行情背景，允许且必须带
+        self.assertIn("大盘评分", txt)
+        body = txt.split("## 0 市场环境")[0]
+        self.assertIn("大盘评分", body or "")          # 大盘评分块在最前面
+        for line in txt.split("\n"):
+            if line.startswith("|"):
+                self.assertNotIn("机械分", line, "候选表里不能有个股机械分")
+        self.assertNotIn("候选表（原始行情与财务，共 0 只）\n| 代码 | 名称 | 机械分", txt)
         self.assertNotIn("推荐度", txt)
 
     def test_factpack_trims_to_cap(self):

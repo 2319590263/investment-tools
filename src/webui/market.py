@@ -44,7 +44,35 @@ def build_market():
         },
         # 批注 5：大盘快照页的「四档打法推荐」——读最新一份荐股产物，每档一只（没有就留空）
         "荐股四档": _style_picks(),
+        # 批注 1：大盘评分（机械 7 : 模型 3）——读当天缓存，没有就同步算快速版
+        "大盘评分": _market_score(),
     }
+
+
+def market_score_bundle(refresh=False):
+    """/api/market/score 的返回：大盘评分块（refresh=1 强制重算）。没有快照时抛 ValueError。"""
+    from . import mktscore
+    block = mktscore.build(refresh=True, full=False) if refresh \
+        else (mktscore.load_cached() or mktscore.build(full=False))
+    if not block:
+        raise ValueError("还没有大盘评分：先抓一次大盘快照")
+    read, path = mktscore.latest_read()
+    return mktscore.apply_read(block, read, path)
+
+
+def _market_score():
+    """大盘评分：当天缓存优先；没有就同步算「快速版」（不含宽度样本与全市场汇总）。"""
+    from . import mktscore
+    try:
+        block = mktscore.load_cached() or mktscore.build(full=False)
+        if not block:
+            return None
+        read, path = mktscore.latest_read()
+        return mktscore.apply_read(block, read, path)
+    except Exception as exc:                  # noqa: BLE001  评分坏了不该拖垮整页
+        return {"总分": None, "机械分": None, "模型分": None, "模块": [],
+                "缺失": [], "无数据源": [], "口径": mktscore.NOTE, "数据日期": {},
+                "错误": "大盘评分计算失败：%s" % str(exc)[:200]}
 
 
 def _style_picks():
@@ -153,6 +181,30 @@ JSON 结构：
 要求：
 1) 关键价位请落在上证指数等真实点位上，依据写清均线／前高前低／缺口／整数关口，不要编造事实包里没有的数据；
 2) 三个情景概率之和应约等于 100；
+3) 数据缺失一律写进「数据依赖」，不要用占位值；
+4) 本结论不构成投资建议。
+"""
+
+MARKET_READ_SYSTEM = ("你是 A 股大盘研判助手。只依据给定数据独立给出大盘评分（0-100）与精简解读，"
+                      "不编造数值、不给具体买卖指令，也不要试图猜另一套程序算的机械分。")
+
+
+MARKET_READ_PROMPT = """下面是 pan.py 采集的中性事实数据 + 一份大盘原始数据清单（都不含机械分与阈值）。
+请独立判断当前 A 股大盘状态，只输出一个合法 JSON 对象：不要解释文字、不要 markdown 代码围栏、不要注释。
+
+JSON 结构：
+{
+  "模型评分": 0-100 的整数或一位小数（越高=大盘越健康、越适合加仓；50 为中性）,
+  "评分理由": "80 字以内，说清给这个分的主要依据",
+  "一句话结论": "40-80 字，点明主要矛盾与应对思路",
+  "风险与应对": [{"风险": "…", "监控指标": "…", "应对": "…"}],
+  "操作建议": ["…（讲仓位与节奏，不给具体个股与价位）"],
+  "数据依赖": ["…缺失或口径打折、会影响判断的地方"]
+}
+
+要求：
+1) 打分请覆盖六个角度：估值、货币与流动性、场内资金、技术趋势、市场情绪、外围传导；数据缺失就直说缺；
+2) 不要输出机械分、阈值或分项得分（那是另一套程序在算，不参与你的打分）；
 3) 数据缺失一律写进「数据依赖」，不要用占位值；
 4) 本结论不构成投资建议。
 """
@@ -323,6 +375,163 @@ def latest_market_forecast():
     if not p:
         return None, None
     return aiplan.read_json(p), p
+
+
+def run_market_score(log, ctl, full=True, refresh=False):
+    """「重新计算」任务：全量取数 → 机械分 → 落当天缓存（不调模型，零成本）。"""
+    from . import mktscore, mktdata
+    log("[..] 大盘评分：%s（%s）"
+        % ("全量" if full else "快速版", "强制重取" if refresh else "优先用当天缓存"))
+    ev = mktdata.collect(refresh=refresh, full=full, log=log)
+    if ctl and ctl.get("cancel"):
+        return {"__canceled__": True}
+    block = mktscore.score(ev)
+    if block.get("机械分") is None:
+        log("[FAIL] 没有任何可得分项：先抓一次大盘快照再算")
+        return {"error": "没有任何可得分项：先抓一次大盘快照再算"}
+    mktscore.save_cached(block)
+    read, path = mktscore.latest_read()
+    merged = mktscore.apply_read(block, read, path)
+    log("[OK] 机械分 %s（实得 %s / 可得 %s）｜ 总分 %s（%s）｜ 缺失 %d 项 ｜ 无数据源 %d 项"
+        % (block["机械分"], block["机械实得"], block["机械可得"], merged.get("总分"),
+           merged.get("权重"), len(block["缺失"]), len(block["无数据源"])))
+    for group in block["模块"]:
+        log("    %s：%s / %s（满分 %s）" % (group["模块"], group["得分"], group["可得"],
+                                       group["满分"]))
+    return {"机械分": block["机械分"], "机械实得": block["机械实得"],
+            "机械可得": block["机械可得"], "总分": merged.get("总分"),
+            "模型分": merged.get("模型分"), "缺失": len(block["缺失"]),
+            "无数据源": len(block["无数据源"])}
+
+
+def save_market_read(payload):
+    """模型解读产物：data/ai/market/read_<YYYYMMDD>/<HHMMSS>.json|.md + latest_read.json。"""
+    day = str(payload.get("trade_date") or aiplan.now_local().strftime("%Y-%m-%d")).replace("-", "")
+    d = os.path.join(MARKET_DIR, "read_%s" % day)
+    os.makedirs(d, exist_ok=True)
+    body = json.dumps(payload, ensure_ascii=False, indent=1)
+    stamp = aiplan.now_local().strftime("%H%M%S")
+    path = os.path.join(d, "%s.json" % stamp)
+    atomic_write(path, body, newline="\n")
+    atomic_write(os.path.join(d, "latest_read.json"), body, newline="\n")
+    j = payload.get("json") or {}
+    lines = ["# 大盘评分 · 模型解读（%s）" % (payload.get("generated_at") or ""),
+             "",
+             "- 模型评分：%s（%s）" % (j.get("模型评分", "—"), j.get("评分理由") or "—"),
+             "- 机械分（同期，仅供参考）：%s" % (payload.get("机械分") if
+                                          payload.get("机械分") is not None else "—"),
+             "- 模型：%s / %s ｜ profile：%s"
+             % (payload.get("provider"), payload.get("model"), payload.get("profile")),
+             "",
+             "## 一句话结论", str(j.get("一句话结论") or "—"), "",
+             "## 风险与应对"]
+    for x in (j.get("风险与应对") or []):
+        lines.append("- **%s**（监控：%s）→ %s" % (x.get("风险"), x.get("监控指标"), x.get("应对")))
+    lines += ["", "## 操作建议"]
+    lines += ["- %s" % a for a in (j.get("操作建议") or [])] or ["- —"]
+    lines += ["", "## 数据依赖"]
+    lines += ["- %s" % a for a in (j.get("数据依赖") or [])] or ["- —"]
+    if payload.get("error"):
+        lines += ["", "## 本次失败", str(payload["error"])]
+    atomic_write(os.path.join(d, "%s.md" % stamp), "\n".join(lines) + "\n", newline="\n")
+    return path
+
+
+def run_market_read(log, profile=None, model_pro=None, api_base=None, api_key=None):
+    """「生成解读」：机械分先算好，再让模型**盲评**（不给机械分）出 0-100 分与精简解读。"""
+    from . import mktscore, mktdata
+    cfg, err = aiplan.load_models(MODELS_PATH)
+    if err:
+        raise RuntimeError(err)
+    pan_path = newest_file(pan_files())
+    pandoc = aiplan.read_json(pan_path) if pan_path else None
+    if not pandoc:
+        raise RuntimeError("没有可用的 pan 快照：先跑 python pan.py post 或点「抓大盘快照」")
+    ev = mktdata.collect(full=False, log=log)
+    block = mktscore.score(ev)
+    if block.get("机械分") is not None:
+        mktscore.save_cached(block)
+    log("[OK] 机械分 %s（实得 %s / 可得 %s）｜ 缺失 %d 项 ｜ 无数据源 %d 项"
+        % (block.get("机械分"), block.get("机械实得"), block.get("机械可得"),
+           len(block.get("缺失") or []), len(block.get("无数据源") or [])))
+    prof_name, prof, src = aiplan.resolve_profile(cfg, pandoc.get("phase") or "post",
+                                                 profile or None, None)
+    if not prof:
+        raise RuntimeError(src)
+    conf = prof.get("研判")
+    if not isinstance(conf, dict):
+        raise RuntimeError("profile「%s」没有研判档" % prof_name)
+    provider = aiplan.find_provider(cfg, conf.get("provider"))
+    if provider is None:
+        raise RuntimeError("provider 不存在：%r" % conf.get("provider"))
+    provider = copy.deepcopy(provider)
+    if api_base:
+        provider["base_url"] = api_base
+    model = model_pro or conf.get("model")
+    if not model:
+        raise RuntimeError("研判档未指定 model")
+    key, _ksrc = aiplan.resolve_key(provider, api_key)
+    if not key and provider.get("鉴权") != "none":
+        raise RuntimeError("未找到 API key（provider=%s）" % provider.get("名称"))
+
+    fact = market_factpack(pandoc)
+    ev_text = mktscore.evidence_text(ev)
+    log("[..] pan 快照 %s（交易日 %s）｜ 事实包 %d 字符 + 原始数据 %d 字符（不含机械分）"
+        % (rel(pan_path), pandoc.get("trade_date"), len(fact), len(ev_text)))
+    log("[OK] profile %s（%s）｜ 研判 %s / %s ｜ key %s"
+        % (prof_name, src, provider.get("名称"), model, aiplan.mask_key(key)))
+    payload = {
+        "tool": "aiplan-webui", "kind": "market_read", "schema_version": "1",
+        "generated_at": aiplan.iso_now(),
+        "trade_date": pandoc.get("trade_date"), "phase": pandoc.get("phase"),
+        "pan_path": pan_path, "profile": prof_name, "profile来源": src,
+        "provider": provider.get("名称"), "model": model,
+        "机械分": block.get("机械分"), "机械实得": block.get("机械实得"),
+        "机械可得": block.get("机械可得"),
+        "口径": "模型盲评：事实包里不含机械分与阈值明细",
+        "note": "模型独立评分与解读，不构成投资建议。",
+    }
+    log("[..] 调用 %s（%s）…" % (model, provider.get("协议")))
+    try:
+        r = aiplan.call_model(provider, model, MARKET_READ_SYSTEM,
+                              MARKET_READ_PROMPT + "\n\n" + fact + "\n\n" + ev_text,
+                              temperature=conf.get("temperature")
+                              if conf.get("temperature") is not None else 0.3,
+                              max_tokens=conf.get("max_tokens") or 6000,
+                              json_mode=bool(provider.get("json_object")),
+                              key=key, extra=conf.get("参数"))
+    except Exception as exc:                   # noqa: BLE001  失败也要落盘如实记录
+        payload["error"] = "模型调用异常：%s" % str(exc)[:200]
+        payload["json"] = {}
+        path = save_market_read(payload)
+        log("[FAIL] 模型调用异常：%s" % str(exc)[:200])
+        return {"read": rel(path), "read_path": path, "error": payload["error"]}
+    if not r.get("ok"):
+        payload["error"] = "模型调用失败：%s" % r.get("error")
+        payload["json"] = {}
+        path = save_market_read(payload)
+        log("[FAIL] %s" % payload["error"])
+        return {"read": rel(path), "read_path": path, "error": payload["error"]}
+    obj, perr = aiplan.extract_json(r.get("text"))
+    usage = r.get("usage") or {}
+    payload["usage"] = usage
+    payload["cost"] = cost_of(provider, model, usage, cfg)
+    payload["latency_ms"] = r.get("latency_ms")
+    payload["json"] = obj or {}
+    if obj is None:
+        payload["error"] = "返回不是合法 JSON：%s" % perr
+        payload["raw_text"] = r.get("text")
+        log("[WARN] 返回不是合法 JSON：%s（原文已存进产物）" % perr)
+    else:
+        log("[OK] 模型评分 %s（%s）" % (obj.get("模型评分"), (obj.get("评分理由") or "")[:60]))
+    log("[OK] usage in %s / out %s ｜ 费用 %s"
+        % (usage.get("输入"), usage.get("输出"),
+           payload["cost"].get("人民币_估算") if payload["cost"].get("人民币_估算") is not None
+           else "未配置单价（仅记录 token）"))
+    path = save_market_read(payload)
+    log("[OK] 已保存 %s" % rel(path))
+    return {"read": rel(path), "read_path": path, "模型评分": (obj or {}).get("模型评分"),
+            "机械分": block.get("机械分"), "总分": mktscore.apply_read(block, payload, path).get("总分")}
 
 
 def run_market_forecast(log, profile=None, model_pro=None, api_base=None, api_key=None):
